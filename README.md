@@ -68,7 +68,7 @@ Keyword routing uses word boundaries and always routes on the original user prom
 
 ## Wake word
 
-The bundled custom verifier fires on **"hey soundwave"** (retrained with adversarial negatives: ordinary-speech false-fire ~0.1%; rebuild with `data/openWakeWord/train_optimus.py --data-dir out_hey_soundwave/hey_soundwave --model-name hey_soundwave`).
+The bundled custom verifier fires on **"hey soundwave"** (retrained with adversarial negatives: ordinary-speech false-fire ~0.1%). See "Retraining the wake word" below to build your own.
 
 | Knob | Default | Notes |
 |---|---|---|
@@ -79,6 +79,31 @@ The bundled custom verifier fires on **"hey soundwave"** (retrained with adversa
 | `JARVIS_WAKE_ENERGY_MIN` | `1000` | int16 peak gate before classifier inference |
 
 False-wake protection has three layers regardless of threshold tuning: (1) wake detection will not arm while our own TTS is playing, (2) empty command after a wake triggers a 2s cooldown before re-arming, (3) the echo guard rejects captured speech that overlaps with what Optimus just said. So you can afford a generous threshold. Whisper wake fallback (when no custom model exists) CPU-pegs a core — keep it as a diagnostic only.
+
+### Retraining the wake word
+
+`training/` contains the scripts that produced the bundled models.
+
+Prereqs (inside the venv): `openwakeword`, `torch`, `edge-tts`, `onnxruntime`,
+`ffmpeg`. You also need `validation_set_features.npy` — openWakeWord's negative
+feature bank (~180 MB). Put it in `training/`.
+
+```bash
+cd training
+# 1) positives (14 edge-tts voices, pitch/rate variants; also emits bare-word + "hey X" forms)
+python gen_positive.py --phrase "hey soundwave" --out-dir out_hey_soundwave/hey_soundwave/positive_train --n 500
+python gen_positive.py --phrase "hey soundwave" --out-dir out_hey_soundwave/hey_soundwave/positive_test  --n 120
+# 2) adversarial negatives (competing wake words + homophones) -> negative_train / negative_test
+#    (run gen_positive.py per phrase, e.g. "hey jarvis", "soundcloud", "wavelength", then move into the dir)
+# 3) train (prints recall + false-wake numbers and a suggested threshold)
+python train_optimus.py --data-dir out_hey_soundwave/hey_soundwave --model-name hey_soundwave --epochs 25
+```
+
+It writes `training/my_custom_model/<name>.onnx` + `.json`. To deploy: copy both
+into `wake_models/`, run `python install_wake_models.py`, then set
+`JARVIS_WAKE_WORDS=<name>` in `.env`. Use `JARVIS_WAKE_DEBOUNCE=1` and pick
+`JARVIS_WAKE_THRESHOLD` from the printed false-wake/recall trade-off
+(0.7 is a good start).
 
 ## Voice pipeline thresholds
 
@@ -140,10 +165,12 @@ jarvis/                      # python package
     └── homeassistant.py # REST API
 
 wake_models/                 # pre-trained wake-word verifiers (onnx + json)
+training/                    # wake-word training scripts (gen_positive, train_optimus)
 install_wake_models.py       # copies wake_models/ into openwakeword
 setup_email_pass.py          # helper: store email app-password in .env
 requirements.txt
 .env.example
+LICENSE                      # MIT
 ```
 
 ## Security
@@ -163,3 +190,6 @@ python -m jarvis --query "turn off living room light"
 python -m jarvis --query "how many unread emails"
 python -m jarvis --query "open github.com and tell me what's trending"
 ```
+## License
+
+MIT - see [LICENSE](LICENSE).
