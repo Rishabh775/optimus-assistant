@@ -1,0 +1,9 @@
+{
+  "model_name": "optimus",
+  "in_dim": 96,
+  "mean": 2.254376173019409,
+  "std": 15.633050918579102,
+  "best_val_acc": 0.919,
+  "n_positive_clips": 599,
+  "framework": "pytorch"
+}

@@ -1,0 +1,10 @@
+.env
+.venv/
+data/
+workspace/
+__pycache__/
+*.pyc
+*.pyo
+*.mp3
+*.wav
+.DS_Store

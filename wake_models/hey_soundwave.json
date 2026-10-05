@@ -1,0 +1,9 @@
+{
+  "model_name": "hey_soundwave",
+  "in_dim": 96,
+  "mean": 2.0911309719085693,
+  "std": 16.677371978759766,
+  "best_val_acc": 0.937,
+  "n_positive_clips": 499,
+  "framework": "pytorch"
+}

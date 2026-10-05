@@ -1,0 +1,9 @@
+{
+  "model_name": "hey_optimus",
+  "in_dim": 96,
+  "mean": 2.1895253658294678,
+  "std": 15.910140991210938,
+  "best_val_acc": 0.925,
+  "n_positive_clips": 499,
+  "framework": "pytorch"
+}
