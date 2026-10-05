@@ -11,6 +11,7 @@ never on mid-loop tool results. Keyword matching uses word boundaries so
 """
 import re
 import socket
+import time
 import uuid
 from dataclasses import dataclass
 from openai import OpenAI
@@ -25,6 +26,12 @@ DEFAULT_LOCAL_MODEL = "llama3.2:3b"  # 7B is too slow on 4-core CPUs
 # If the primary cloud model fails (free previews can vanish), retry once
 # with the cheapest solid paid model instead of erroring the conversation.
 FALLBACK_CLOUD_MODEL = os.getenv("JARVIS_CLOUD_FALLBACK", "mimo-v2.6-flash")
+
+# Circuit breaker: when the primary cloud model fails, route straight to the
+# fallback for this many seconds instead of re-hitting a dead model (which
+# otherwise costs a full timeout on every single call).
+CLOUD_COOLDOWN = float(os.getenv("JARVIS_CLOUD_COOLDOWN", "90"))
+_cloud_down_until = 0.0
 
 TIMEOUT_S = float(os.getenv("JARVIS_LLM_TIMEOUT", "60"))
 MAX_RETRIES = int(os.getenv("JARVIS_LLM_RETRIES", "2"))
@@ -112,6 +119,15 @@ def pick_route(prompt: str) -> Route:
                  "default -> cloud")
 
 
+def cloud_status() -> str:
+    """Human-readable state of the primary cloud model (for self_status)."""
+    if not os.getenv("OPENCODE_API_KEY"):
+        return "no api key"
+    if time.time() < _cloud_down_until:
+        return f"cooling down {int(_cloud_down_until - time.time())}s (using fallback)"
+    return "ok"
+
+
 def _ollama_up(timeout: float = 1.0) -> bool:
     """Cheap reachability check for the Ollama daemon (cached)."""
     global _OLLAMA_UP
@@ -138,6 +154,7 @@ class LLM:
     def chat(self, messages, tools=None, force: Route = None,
              route_text: str = None):
         """route_text: the original user prompt -- routing decision input."""
+        global _cloud_down_until
         text = route_text if route_text is not None else (
             messages[-1]["content"] if messages else "")
         route = force or pick_route(text)
@@ -162,14 +179,22 @@ class LLM:
         kwargs = {"model": route.model, "messages": messages}
         if tools:
             kwargs["tools"] = [{"type": "function", "function": t} for t in tools]
+        if (route.provider == "cloud" and time.time() < _cloud_down_until
+                and route.model != FALLBACK_CLOUD_MODEL):
+            fb = _supported(FALLBACK_CLOUD_MODEL)
+            route = Route("cloud", fb, "primary cooling down -> fallback")
+            kwargs["model"] = fb
         try:
             resp = client.chat.completions.create(**kwargs)
+            if route.provider == "cloud" and route.model != FALLBACK_CLOUD_MODEL:
+                _cloud_down_until = 0.0   # primary healthy again
         except Exception as e:
             if (route.provider == "cloud"
                     and route.model != FALLBACK_CLOUD_MODEL):
+                _cloud_down_until = time.time() + CLOUD_COOLDOWN
                 fb = _supported(FALLBACK_CLOUD_MODEL)
                 print(f"[router] '{route.model}' failed ({type(e).__name__}); "
-                      f"retrying with fallback '{fb}'")
+                      f"cooling down {int(CLOUD_COOLDOWN)}s, retrying with '{fb}'")
                 route = Route("cloud", fb, f"fallback from {route.model}")
                 kwargs["model"] = fb
                 resp = client.chat.completions.create(**kwargs)

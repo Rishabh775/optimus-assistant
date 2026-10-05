@@ -160,6 +160,8 @@ def wait_for_wake(threshold: float = None, chunk: int = 1280):
 def _wait_onnx(words: list, threshold: float, chunk: int):
     import sounddevice as sd
     import time
+    from .voice import _silence_warnings
+    _silence_warnings()
     model = _load_onnx()
     sample_rate = 16000
     print(f"[{_name()}] listening for wake-word (onnx, threshold={threshold})...")
@@ -184,6 +186,8 @@ def _wait_onnx(words: list, threshold: float, chunk: int):
 def _wait_custom(threshold: float = 0.7):
     """Custom-trained classifier with silence gate + debouncing + adaptive buffer."""
     import sounddevice as sd
+    from .voice import _silence_warnings
+    _silence_warnings()
     sample_rate = 16000
     chunk_ms = int(os.getenv("JARVIS_WAKE_CHUNK_MS", "1600"))
     chunk_samples = int(sample_rate * chunk_ms / 1000)

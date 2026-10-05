@@ -129,6 +129,24 @@ def write_file(path: str, content: str) -> str:
         return f"ERROR: {e}"
 
 
+def remember_fact(fact: str) -> str:
+    """Save a durable fact about the user (name, preferences, constraints)."""
+    from . import facts
+    return facts.add(fact)
+
+
+def recall_facts() -> str:
+    """List all saved durable facts about the user."""
+    from . import facts
+    return facts.text() or "(no saved facts)"
+
+
+def forget_fact(fact: str) -> str:
+    """Forget saved facts matching a substring."""
+    from . import facts
+    return facts.forget(fact)
+
+
 def self_status() -> str:
     """Report this assistant's own live configuration/state (introspection)."""
     import datetime
@@ -138,23 +156,39 @@ def self_status() -> str:
         return os.getenv(k, d)
 
     key = "configured" if os.getenv("OPENCODE_API_KEY") else "MISSING"
+    try:
+        from .router import _ollama_up, cloud_status
+        ollama = "up" if _ollama_up() else "down"
+        cloud = cloud_status()
+    except Exception:
+        ollama, cloud = "?", "?"
+    try:
+        from . import facts as _facts
+        nfacts = len(_facts.all_facts())
+    except Exception:
+        nfacts = 0
     return "\n".join([
         f"assistant: {g('JARVIS_NAME', 'Optimus')}",
         f"time: {datetime.datetime.now().isoformat(timespec='seconds')}",
         f"host: {platform.node()} ({platform.system()} {platform.machine()})",
         f"cloud model: {g('JARVIS_CLOUD_MODEL')}  fallback: {g('JARVIS_CLOUD_FALLBACK', 'mimo-v2.6-flash')}",
+        f"cloud status: {cloud}  |  ollama: {ollama}",
         f"code model: {g('JARVIS_CODE_MODEL')}",
         f"local model: {g('JARVIS_LOCAL_MODEL')} (enabled={g('JARVIS_LOCAL_OK', '0')})",
         f"wake word: {g('JARVIS_WAKE_WORDS', 'hey_optimus')} (threshold {g('JARVIS_WAKE_THRESHOLD', '0.7')}, debounce {g('JARVIS_WAKE_DEBOUNCE', '1')})",
         f"tts voice: {g('JARVIS_TTS_VOICE')}  rate {g('JARVIS_TTS_RATE', '+0%')}",
         f"cloud api key: {key}",
         f"tools: {len(TOOL_FUNCS)} registered",
+        f"durable facts: {nfacts} (facts.jsonl; separate from Chroma conversation memory)",
     ])
 
 
 def web_search(query: str, n: int = 5) -> str:
     """Search the web. Returns titles + URLs + snippets."""
-    from duckduckgo_search import DDGS
+    try:
+        from ddgs import DDGS          # renamed package (2025)
+    except ImportError:
+        from duckduckgo_search import DDGS
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=n))
@@ -244,6 +278,29 @@ def ha_search(query: str) -> str:
 
 
 TOOL_SCHEMAS = [
+    {
+        "name": "remember_fact",
+        "description": "Save a durable fact about the user (name, preferences, constraints) to persist across sessions. Use when the user shares something lasting.",
+        "parameters": {
+            "type": "object",
+            "properties": {"fact": {"type": "string"}},
+            "required": ["fact"],
+        },
+    },
+    {
+        "name": "recall_facts",
+        "description": "List all saved durable facts about the user.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "forget_fact",
+        "description": "Forget saved durable facts matching a substring.",
+        "parameters": {
+            "type": "object",
+            "properties": {"fact": {"type": "string"}},
+            "required": ["fact"],
+        },
+    },
     {
         "name": "self_status",
         "description": "Report your own live configuration/state (models, wake word, voice). Use when asked about yourself.",
@@ -439,6 +496,9 @@ TOOL_SCHEMAS = [
 
 
 TOOL_FUNCS = {
+    "remember_fact": remember_fact,
+    "recall_facts": recall_facts,
+    "forget_fact": forget_fact,
     "self_status": self_status,
     "shell_run": shell_run,
     "read_file": read_file,

@@ -7,7 +7,7 @@ mic -> [wake-word] -> faster-whisper STT -> Agent -> [Router] -> Ollama (simple,
                                                          \-> longcat-2.5-preview-free (default cloud, free)
                                                          \-> mimo-v2.6-flash (cloud fallback)
                                                          \-> Kimi K2.7 Code (code)
-                       -> 20 tools (self-status/triage/shell/file/web/browser/email/calendar/HA)
+                       -> 23 tools (self-status/memory/triage/shell/file/web/browser/email/calendar/HA)
                        -> response -> edge-tts (Andrew voice) -> speaker
 ```
 
@@ -38,11 +38,12 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (20)
+## Tools (23)
 
 | Tool | What |
 |---|---|
 | `self_status` | report the assistant's own live config/state (introspection) |
+| `remember_fact`, `recall_facts`, `forget_fact` | durable user memory (name, preferences) persisted to `data/facts.jsonl` |
 | `shell_run`, `read_file`, `write_file` | local system |
 | `web_search`, `browser_open`, `browser_extract`, `browser_screenshot` | web |
 | `email_triage` | rank emails by importance (VIP senders + keywords) |
@@ -110,7 +111,12 @@ into `wake_models/`, run `python install_wake_models.py`, then set
 | Setting | Default | What it does |
 |---|---|---|
 | `JARVIS_STT_END_SILENCE` | `1800`ms | mid-speech pause tolerance; raise if you still get cut off while thinking |
+| `JARVIS_STT_MAX_NO_SPEECH` | `0.6` | confidence gate: drop transcript if it also has low logprob |
+| `JARVIS_STT_MIN_LOGPROB` | `-1.0` | confidence gate: drop transcript if no_speech_prob is also high |
+| `JARVIS_CLOUD_COOLDOWN` | `90`s | after a cloud failure, use the fallback for this long (circuit breaker) |
 | `JARVIS_STT_ENERGY_MULT` | `1.0` | peak-based mic gate (matches wake scale); floor 400 — soft speech stays "voiced" |
+| `JARVIS_STT_GATE_MAX` | `6000` | gate ceiling; ambient is a median (transient-proof) so a loud moment can't make it deaf |
+| `JARVIS_STT_TAIL` | `0.35`s | silence after TTS stops before sampling/calibrating (speaker tail margin) |
 | `JARVIS_STT_COMPUTE` | `int8` | faster-whisper compute type |
 | `JARVIS_STT_THREADS` | `4` | faster-whisper CPU threads |
 | `JARVIS_FOLLOWUP` | `1` | continued conversation window after each answer |
@@ -122,7 +128,9 @@ into `wake_models/`, run `python install_wake_models.py`, then set
 | `JARVIS_TTS_RATE` | `+0%` | e.g. `+10%` for snappier playback |
 | `JARVIS_HOTKEY` | `ctrl+alt+j` | supports `ctrl`, `alt`, `shift`, `cmd/super/win`, + single letter |
 
-`voice.listen` also retries once without VAD if the energy gate saw speech but the Silero VAD stripped the audio — protects against quiet utterances being lost.
+`voice.listen` also retries once without VAD if the energy gate saw speech but the Silero VAD stripped the audio — protects against quiet utterances being lost. Transcripts that look like silence/noise (high `no_speech_prob` AND low `avg_logprob`) are dropped instead of sent to the LLM.
+
+**Fully-offline note:** STT is local (faster-whisper) and memory is local, but TTS uses edge-tts (Microsoft, cloud) by default. To go fully offline, install `piper-tts` + `espeak-ng` and a Piper voice, and point `JARVIS_TTS_PLAYER`/engine at it — not enabled by default because `espeak-ng` is a system dependency.
 
 ## Configure integrations
 

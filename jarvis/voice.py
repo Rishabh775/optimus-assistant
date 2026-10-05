@@ -63,6 +63,15 @@ def is_speaking() -> bool:
     """True while the assistant is speaking (mic must stay closed)."""
     return _SPEAKING.is_set()
 
+
+def _silence_warnings():
+    """Re-apply noise filters. openwakeword/onnxruntime reset Python's warning
+    filters at import, which resurrects sounddevice's NumPy 2.5 spam and
+    subprocess ResourceWarnings. Call this at the top of hot audio paths."""
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)
+    warnings.filterwarnings("ignore", category=ResourceWarning)
+
 # ---- Persistent STT (loaded once per process) ----
 _STT_MODELS = {}          # model_name -> engine object
 _STT_BACKEND = None       # "faster" | "openai"
@@ -117,49 +126,82 @@ def _transcribe(audio_f32: np.ndarray, model_name: str = None,
     return result.get("text", "").strip()
 
 
+def _transcribe_scored(audio_f32: np.ndarray, model_name: str = None,
+                       vad: bool = True):
+    """Like _transcribe but also returns (text, avg_logprob, no_speech_prob).
+
+    faster-whisper exposes per-segment confidence; we use it to reject
+    silence/hallucinated transcripts (pattern from computah / Isolaee).
+    Falls back to (text, 0.0, 0.0) when scores aren't available.
+    """
+    if model_name is None:
+        model_name = os.getenv("JARVIS_WHISPER_MODEL", "base")
+    model = get_stt(model_name)
+    if _stt_backend() == "faster":
+        segments, _info = model.transcribe(
+            audio_f32, beam_size=1, vad_filter=vad, without_timestamps=True)
+        segs = list(segments)
+        if not segs:
+            return "", 0.0, 1.0
+        text = " ".join(s.text.strip() for s in segs).strip()
+        lp = float(sum(getattr(s, "avg_logprob", 0.0) for s in segs) / len(segs))
+        nsp = float(max(getattr(s, "no_speech_prob", 0.0) for s in segs))
+        return text, lp, nsp
+    result = model.transcribe(audio_f32, fp16=False, beam_size=1,
+                              without_timestamps=True)
+    return result.get("text", "").strip(), 0.0, 0.0
+
+
 def _calibrate_energy() -> int:
     """One-time ambient noise calibration -> int16 PEAK gate (cached).
 
     Peak-based on purpose: the wake detector's energy gate is peak-based too
     (np.abs(audio).max() > 1000) and provably hears the user on this mic.
-    An RMS gate is ~4x stricter and silently dropped quiet speech.
+    Uses the MEDIAN peak over several short windows (robust to a single loud
+    transient, e.g. speaker bleed) and clamps the result so a noisy calibration
+    can never make the assistant deaf for the whole session.
     """
     global _ENERGY_GATE
     if _ENERGY_GATE is None:
         import sounddevice as sd
-        dur = float(os.getenv("JARVIS_STT_CALIBRATION", "0.4"))
-        n = int(_SAMPLE_RATE * dur)
+        _silence_warnings()
         gain = float(os.getenv("JARVIS_MIC_GAIN", "1.0"))
+        win = int(_SAMPLE_RATE * 0.1)   # 100ms windows
+        n_win = 5                        # ~0.5s total
         try:
+            peaks = []
             with sd.InputStream(samplerate=_SAMPLE_RATE, channels=1,
-                                dtype="int16", blocksize=n) as stream:
-                audio = stream.read(n)[0].flatten().astype(np.int16)
-            audio = _apply_gain(audio, gain)
-            ambient_peak = float(np.abs(audio).max())
+                                dtype="int16", blocksize=win) as stream:
+                for _ in range(n_win):
+                    a = stream.read(win)[0].flatten().astype(np.int16)
+                    peaks.append(float(np.abs(_apply_gain(a, gain)).max()))
+            ambient_peak = float(np.median(peaks))
         except Exception:
             ambient_peak = 300.0
         mult = float(os.getenv("JARVIS_STT_ENERGY_MULT", "1.0"))
-        _ENERGY_GATE = max(ambient_peak * mult, 400.0)
-        msg = f"[stt] mic gate calibrated: {_ENERGY_GATE:.0f} (ambient peak {ambient_peak:.0f}"
+        gate_max = float(os.getenv("JARVIS_STT_GATE_MAX", "6000"))
+        _ENERGY_GATE = min(max(ambient_peak * mult, 400.0), gate_max)
+        msg = (f"[stt] mic gate calibrated: {_ENERGY_GATE:.0f} "
+               f"(ambient peak {ambient_peak:.0f}")
         if gain != 1.0:
             msg += f", gain x{gain}"
         msg += ")"
-        if _ENERGY_GATE > 5000:
-            msg += "  [WARN: loud room - speech capture unreliable; reduce noise and restart]"
+        if ambient_peak * mult > gate_max:
+            msg += f"  [capped at {gate_max:.0f} - room is loud]"
         print(msg)
     return _ENERGY_GATE
 
 
 def _wait_for_quiet(max_wait: float = 30.0) -> None:
     """Block while our own TTS is playing (kills the speaker->mic echo loop),
-    then wait a tail margin for ALSA/reverb to die out."""
+    then ALWAYS wait a tail margin so we never sample the speaker's fading
+    audio (which previously poisoned the one-time ambient calibration)."""
     import time
     waited = 0.0
     while is_speaking() and waited < max_wait:
         time.sleep(0.1)
         waited += 0.1
-    if waited or is_speaking():
-        time.sleep(0.3)
+    time.sleep(float(os.getenv("JARVIS_STT_TAIL", "0.35")))
 
 
 def listen(timeout: int = 6, phrase_limit: int = 30,
@@ -172,6 +214,7 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
     - Returns "" on silence/timeout/unintelligible audio
     """
     import sounddevice as sd
+    _silence_warnings()
     _wait_for_quiet()
     gate = energy_threshold or _calibrate_energy()
     chunk_ms = 100
@@ -197,8 +240,12 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
                 if not voiced:
                     waited += 1
                     if waited > wait_chunks:
+                        # Recalibrate next time: the cached gate may have been
+                        # poisoned by a loud calibration moment.
+                        global _ENERGY_GATE
+                        _ENERGY_GATE = None
                         print(f"[{name}] (no speech above gate {gate:.0f} "
-                              f"in {timeout}s - speak AFTER the greeting)")
+                              f"in {timeout}s - recalibrating; speak AFTER the greeting)")
                         return ""
                     if peak < gate:
                         continue
@@ -221,12 +268,21 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
     if audio.max() < 0.01:
         return ""
     try:
-        text = _transcribe(audio, model_name)
+        text, lp, nsp = _transcribe_scored(audio, model_name)
         if not text:
             # Silero VAD can strip quiet/short utterances entirely; the energy
             # gate already confirmed speech, so retry once without VAD
-            text = _transcribe(audio, model_name, vad=False)
+            text, lp, nsp = _transcribe_scored(audio, model_name, vad=False)
         if text:
+            max_nsp = float(os.getenv("JARVIS_STT_MAX_NO_SPEECH", "0.6"))
+            min_lp = float(os.getenv("JARVIS_STT_MIN_LOGPROB", "-1.0"))
+            # Confidence gate: reject silence/noise decodes. Following
+            # faster-whisper's rule, a confident decode is never rejected for
+            # low logprob alone -- both must look bad.
+            if nsp > max_nsp and lp < min_lp:
+                print(f"[stt] rejected low-confidence transcript '{text[:40]}' "
+                      f"(no_speech={nsp:.2f}, logprob={lp:.2f})")
+                return ""
             print(f"[USER] {text}")
             sounds.end()  # audible: command captured, processing starts
         return text
