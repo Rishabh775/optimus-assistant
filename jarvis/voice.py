@@ -52,6 +52,7 @@ if not PLAYER:
 _TTS_LOCK = threading.Lock()
 _TTS_STOP_EVENT = threading.Event()
 _CURRENT_PROCESS = None
+_PROC_LOCK = threading.Lock()    # guards _CURRENT_PROCESS across threads
 _SPEAKING = threading.Event()   # set while our TTS is playing
 
 
@@ -329,16 +330,17 @@ async def _synth(text: str, voice: str, rate: str = "+0%") -> str:
 
 
 def stop_tts():
-    """Stop any ongoing TTS playback immediately."""
+    """Stop any ongoing TTS playback immediately (thread-safe)."""
     global _CURRENT_PROCESS
     _TTS_STOP_EVENT.set()
-    if _CURRENT_PROCESS and _CURRENT_PROCESS.poll() is None:
+    with _PROC_LOCK:
+        proc, _CURRENT_PROCESS = _CURRENT_PROCESS, None
+    if proc and proc.poll() is None:
         try:
-            _CURRENT_PROCESS.kill()
-            _CURRENT_PROCESS.wait(timeout=1)
+            proc.kill()
+            proc.wait(timeout=1)
         except Exception:
             pass
-    _CURRENT_PROCESS = None
 
 
 _URL_RE = re.compile(r"https?://\S+")
@@ -378,15 +380,18 @@ def speak(text: str, blocking: bool = True):
         if _TTS_STOP_EVENT.is_set():
             return
         _show_once()
-        _CURRENT_PROCESS = subprocess.Popen(
+        proc = subprocess.Popen(
             player_args + [path],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
+        with _PROC_LOCK:
+            _CURRENT_PROCESS = proc
         try:
-            _CURRENT_PROCESS.wait()
+            proc.wait()
         finally:
-            if _CURRENT_PROCESS:
-                _CURRENT_PROCESS = None
+            with _PROC_LOCK:
+                if _CURRENT_PROCESS is proc:
+                    _CURRENT_PROCESS = None
             try:
                 os.unlink(path)
             except OSError:
