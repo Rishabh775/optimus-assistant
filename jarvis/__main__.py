@@ -294,6 +294,22 @@ def wake_loop(agent: Agent):
             console.print(f"[red]error:[/red] {e}")
 
 
+def _voice_confirm(reason: str, fn_name: str, args: dict) -> bool:
+    """Ask for spoken confirmation before a consequential tool call."""
+    speak(f"Confirmation needed: {reason}. Say yes to proceed.")
+    ans = listen(timeout=6)
+    ok = ans.strip().lower().startswith(
+        ("yes", "yeah", "yep", "sure", "go ahead", "do it", "confirm", "ok"))
+    speak("Okay, proceeding." if ok else "Cancelled.")
+    return ok
+
+
+def _text_confirm(reason: str, fn_name: str, args: dict) -> bool:
+    ans = Prompt.ask(f"[yellow]Confirm: {reason}?[/yellow]",
+                     choices=["yes", "no"], default="no")
+    return ans == "yes"
+
+
 def main():
     p = argparse.ArgumentParser(prog="optimus")
     p.add_argument("--mode", choices=["text", "voice", "hotkey", "wake"],
@@ -304,7 +320,11 @@ def main():
     for problem in config.validate():
         console.print(f"[yellow]config warning:[/yellow] {problem}")
 
-    agent = Agent()
+    confirm = None
+    if config.get_bool("JARVIS_CONFIRM") and not args.query:
+        confirm = _text_confirm if args.mode == "text" else _voice_confirm
+
+    agent = Agent(confirm=confirm)
 
     if args.query:
         print(agent.ask(args.query))

@@ -70,6 +70,37 @@ def _is_dangerous(cmd: str) -> str | None:
     return None
 
 
+# Consequential-but-allowed commands: not blocked, but worth a confirmation
+# prompt before running (defense-in-depth against prompt injection).
+_RISKY_SHELL = re.compile(
+    r"(^|[;&|]\s*)(sudo|rm|rmdir|mv|dd|shred|truncate|chmod|chown|"
+    r"kill|pkill|killall|systemctl|service|mount|umount|"
+    r"apt|apt-get|pacman|yum|dnf|pip|pip3|npm|yarn|pnpm|cargo)\b"
+    r"|git\s+(push|reset|clean|checkout|rebase)"
+    r"|>>?\s*\S", re.I)
+
+
+def needs_confirmation(fn_name: str, args: dict) -> str | None:
+    """Return a human reason if this tool call should require confirmation,
+    else None. Confirmation is asked by the interaction layer (voice/text)."""
+    args = args or {}
+    if fn_name == "shell_run":
+        cmd = str(args.get("cmd", ""))
+        m = _RISKY_SHELL.search(cmd)
+        if m:
+            return f"run a potentially destructive shell command ({m.group(0).strip()!r})"
+        return None
+    if fn_name == "email_send":
+        return f"send an email to {args.get('to', '?')}"
+    if fn_name == "write_file":
+        p = Path(str(args.get("path", ""))).expanduser()
+        if not p.is_absolute():
+            p = WORKSPACE / p
+        if p.exists():
+            return f"overwrite the existing file {p}"
+    return None
+
+
 def shell_run(cmd: str, timeout: int = 30) -> str:
     """Run a shell command in WORKSPACE with a scrubbed environment."""
     blocked = _is_dangerous(cmd)

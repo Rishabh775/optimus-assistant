@@ -5,7 +5,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .router import LLM
-from .builtin_tools import TOOL_SCHEMAS, TOOL_FUNCS
+from .builtin_tools import TOOL_SCHEMAS, TOOL_FUNCS, needs_confirmation
 from .memory import Memory
 from . import config
 
@@ -55,16 +55,29 @@ For "what's important in my email": call email_triage (deterministic ranking by 
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, confirm=None):
         self.llm = LLM()
         self.memory = Memory()
-        name = os.getenv("JARVIS_NAME", "Optimus")
+        self.confirm = confirm          # callable(reason, fn_name, args) -> bool
+        name = config.get("JARVIS_NAME")
         try:
             mem_count = self.memory.count()
         except Exception:
             mem_count = 0
         self.history = [{"role": "system",
                          "content": _build_system(name, mem_count)}]
+
+    def _confirmed(self, reason: str, fn_name: str, args: dict) -> bool:
+        """Gate consequential actions. No interactive hook (e.g. --query) ->
+        allow, since the user directly issued that single command."""
+        if not config.get_bool("JARVIS_CONFIRM"):
+            return True
+        if self.confirm is None:
+            return True
+        try:
+            return bool(self.confirm(reason, fn_name, args))
+        except Exception:
+            return False
 
     def _finish(self, user_input: str, content: str) -> str:
         """Record the exchange in history + memory, return the spoken answer."""
@@ -127,12 +140,16 @@ class Agent:
                     if not fn:
                         out = f"UNKNOWN TOOL: {fn_name}"
                     else:
-                        try:
-                            out = fn(**args)
-                        except TypeError as e:
-                            out = f"ERROR: bad arguments for {fn_name}: {e}"
-                        except Exception as e:
-                            out = f"ERROR: {e}"
+                        reason = needs_confirmation(fn_name, args)
+                        if reason and not self._confirmed(reason, fn_name, args):
+                            out = f"DENIED: user did not confirm ({reason})"
+                        else:
+                            try:
+                                out = fn(**args)
+                            except TypeError as e:
+                                out = f"ERROR: bad arguments for {fn_name}: {e}"
+                            except Exception as e:
+                                out = f"ERROR: {e}"
                 console.print(Panel(str(out)[:1000], title="result", border_style="green"))
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(out)})
 

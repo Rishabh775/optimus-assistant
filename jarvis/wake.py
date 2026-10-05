@@ -16,6 +16,7 @@ from .audio import energy_gate as _energy_gate
 from .audio import mic_gain as _mic_gain
 from .audio import silence_warnings as _silence_warnings
 from . import config
+from .log import log
 
 _MODEL_DIR = Path(os.getenv(
     "JARVIS_WAKE_MODELS_DIR",
@@ -211,15 +212,15 @@ def _wait_custom(threshold: float = 0.7):
                     print(f"[{_name()}] wake: {meta['model_name']} ({peak:.2f})")
                     hit = meta["model_name"]
                 else:
-                    print(f"[wake] match {consecutive_hits}/{debounce_n} "
-                          f"(score {peak:.2f}) - need {debounce_n} in a row")
+                    log("wake").info(f"[wake] match {consecutive_hits}/{debounce_n} "
+                             f"(score {peak:.2f}) - need {debounce_n} in a row")
             else:
                 # near-miss telemetry: shows your real score so we can tune
                 import time as _t
                 if peak >= 0.25 and _t.time() - _last_wake_log[0] > 1.5:
                     _last_wake_log[0] = _t.time()
-                    print(f"[wake] near miss (score {peak:.2f}, "
-                          f"need >{threshold:.2f})")
+                    log("wake").info(f"[wake] near miss (score {peak:.2f}, "
+                             f"need >{threshold:.2f})")
                 consecutive_hits = 0
     # stream closed: mic free for listen_after_wake(), no self-wake
     yield hit

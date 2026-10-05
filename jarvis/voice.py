@@ -21,6 +21,7 @@ import numpy as np
 
 from . import sounds
 from . import config
+from .log import log
 from .audio import apply_gain as _apply_gain
 from .audio import silence_warnings as _silence_warnings
 
@@ -174,7 +175,7 @@ def _calibrate_energy() -> int:
         msg += ")"
         if ambient_peak * mult > gate_max:
             msg += f"  [capped at {gate_max:.0f} - room is loud]"
-        print(msg)
+        log("stt").info(msg)
     return _ENERGY_GATE
 
 
@@ -266,8 +267,8 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
             # faster-whisper's rule, a confident decode is never rejected for
             # low logprob alone -- both must look bad.
             if nsp > max_nsp and lp < min_lp:
-                print(f"[stt] rejected low-confidence transcript '{text[:40]}' "
-                      f"(no_speech={nsp:.2f}, logprob={lp:.2f})")
+                log("stt").info(f"[stt] rejected low-confidence transcript '{text[:40]}' "
+                            f"(no_speech={nsp:.2f}, logprob={lp:.2f})")
                 return ""
             print(f"[USER] {text}")
             sounds.end()  # audible: command captured, processing starts

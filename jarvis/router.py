@@ -19,6 +19,7 @@ import os
 from dotenv import load_dotenv
 
 from . import config
+from .log import log
 
 load_dotenv()
 
@@ -87,8 +88,8 @@ def _supported(model: str) -> str:
     if model in CHAT_COMPLETIONS_MODELS:
         return model
     if model not in _WARNED_MODELS:
-        print(f"[router] model '{model}' not on the chat/completions endpoint;"
-              f" falling back to {DEFAULT_CLOUD_MODEL}")
+        log("router").warning(f"[router] model '{model}' not on the chat/completions endpoint; "
+                          f"falling back to {DEFAULT_CLOUD_MODEL}")
         _WARNED_MODELS.add(model)
     return DEFAULT_CLOUD_MODEL
 
@@ -195,8 +196,8 @@ class LLM:
                     and route.model != FALLBACK_CLOUD_MODEL):
                 _cloud_down_until = time.time() + CLOUD_COOLDOWN
                 fb = _supported(FALLBACK_CLOUD_MODEL)
-                print(f"[router] '{route.model}' failed ({type(e).__name__}); "
-                      f"cooling down {int(CLOUD_COOLDOWN)}s, retrying with '{fb}'")
+                log("router").warning(f"[router] '{route.model}' failed ({type(e).__name__}); "
+                          f"cooling down {int(CLOUD_COOLDOWN)}s, retrying with '{fb}'")
                 route = Route("cloud", fb, f"fallback from {route.model}")
                 kwargs["model"] = fb
                 resp = client.chat.completions.create(**kwargs)

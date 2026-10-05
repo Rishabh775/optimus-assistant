@@ -51,6 +51,7 @@ DEFAULTS = {
     "JARVIS_GREET": "1",
     "JARVIS_SOUNDS": "1",
     "JARVIS_BARGE_IN": "0",
+    "JARVIS_CONFIRM": "1",
 }
 
 

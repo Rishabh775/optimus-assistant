@@ -82,3 +82,28 @@ def test_email_triage_ranking(monkeypatch):
 def test_self_status_runs():
     out = bt.self_status()
     assert "tools:" in out and "durable facts:" in out
+
+
+# ---- confirmation policy ----
+@pytest.mark.parametrize("fn,args", [
+    ("shell_run", {"cmd": "rm -rf build"}),
+    ("shell_run", {"cmd": "sudo reboot"}),
+    ("shell_run", {"cmd": "echo x > important.txt"}),
+    ("shell_run", {"cmd": "pip install foo"}),
+    ("email_send", {"to": "a@b.com", "subject": "s", "body": "b"}),
+    ("write_file", {"path": "existing_overwrite_test.txt", "content": "x"}),
+])
+def test_needs_confirmation_flags(fn, args):
+    if fn == "write_file":
+        # create the target first so it counts as an overwrite
+        bt.write_file("existing_overwrite_test.txt", "old")
+    assert bt.needs_confirmation(fn, args) is not None
+
+
+@pytest.mark.parametrize("fn,args", [
+    ("shell_run", {"cmd": "ls -la"}),
+    ("shell_run", {"cmd": "echo hi"}),
+    ("read_file", {"path": "README.md"}),
+])
+def test_needs_confirmation_allows(fn, args):
+    assert bt.needs_confirmation(fn, args) is None

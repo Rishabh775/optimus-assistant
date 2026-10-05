@@ -168,6 +168,7 @@ jarvis/                      # python package
 ├── facts.py         # durable user facts (facts.jsonl)
 ├── config.py        # central settings + validation
 ├── audio.py         # shared gain/energy/warning helpers
+├── log.py           # leveled logging (JARVIS_LOG_LEVEL)
 ├── sounds.py        # ack/end chirps (generated, no assets)
 └── tools/
     ├── browser.py       # Playwright
@@ -193,6 +194,7 @@ LICENSE                      # MIT
 - `shell_run` executes in `~/jarvis/workspace/` with a **scrubbed environment** (keys/tokens/passwords removed from child processes) and a destructive-command blocklist (rm -r outside workspace, mkfs, dd to /dev, fork bombs, `curl|sh`, shutdown/reboot, etc.)
 - `read_file` limited to `$HOME` + `/tmp`; secret files (`.env`, keys, tokens, credentials) blocked
 - `write_file` limited to `workspace/` by default (`JARVIS_ALLOW_ANY_PATH=1` lifts to `$HOME`)
+- **Confirmation gate** (`JARVIS_CONFIRM=1`): the agent asks before consequential actions — risky shell commands (rm/mv/sudo/redirects/installs), sending email, overwriting files. In voice mode it asks aloud and waits for "yes"; in text mode it prompts. This is the main defense against the email/web → shell prompt-injection chain.
 - The blocklist is **not** a sandbox: content read via email/browser flows into the model's context, so a crafted email/web page can still try to steer `shell_run`. For defense in depth, run as a dedicated user or wrap shell in `firejail`/`bubblewrap`.
 
 ## Tested examples
@@ -209,6 +211,15 @@ python -m jarvis --query "open github.com and tell me what's trending"
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest          # offline; no mic, no API key needed
+```
+
+## Logging
+
+Diagnostics go through `jarvis/log.py`. Default output is unchanged; raise verbosity or add timestamps via env:
+
+```bash
+JARVIS_LOG_LEVEL=DEBUG
+JARVIS_LOG_FORMAT="%(asctime)s %(levelname)s %(name)s: %(message)s"
 ```
 
 ## License
