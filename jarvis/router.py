@@ -18,23 +18,25 @@ from openai import OpenAI
 import os
 from dotenv import load_dotenv
 
+from . import config
+
 load_dotenv()
 
-DEFAULT_CLOUD_MODEL = "longcat-2.5-preview-free"
-DEFAULT_CODE_MODEL = "kimi-k2.7-code"
-DEFAULT_LOCAL_MODEL = "llama3.2:3b"  # 7B is too slow on 4-core CPUs
+DEFAULT_CLOUD_MODEL = config.DEFAULTS["JARVIS_CLOUD_MODEL"]
+DEFAULT_CODE_MODEL = config.DEFAULTS["JARVIS_CODE_MODEL"]
+DEFAULT_LOCAL_MODEL = config.DEFAULTS["JARVIS_LOCAL_MODEL"]  # 7B too slow on 4-core CPUs
 # If the primary cloud model fails (free previews can vanish), retry once
 # with the cheapest solid paid model instead of erroring the conversation.
-FALLBACK_CLOUD_MODEL = os.getenv("JARVIS_CLOUD_FALLBACK", "mimo-v2.6-flash")
+FALLBACK_CLOUD_MODEL = config.get("JARVIS_CLOUD_FALLBACK")
 
 # Circuit breaker: when the primary cloud model fails, route straight to the
 # fallback for this many seconds instead of re-hitting a dead model (which
 # otherwise costs a full timeout on every single call).
-CLOUD_COOLDOWN = float(os.getenv("JARVIS_CLOUD_COOLDOWN", "90"))
+CLOUD_COOLDOWN = config.get_float("JARVIS_CLOUD_COOLDOWN")
 _cloud_down_until = 0.0
 
-TIMEOUT_S = float(os.getenv("JARVIS_LLM_TIMEOUT", "60"))
-MAX_RETRIES = int(os.getenv("JARVIS_LLM_RETRIES", "2"))
+TIMEOUT_S = config.get_float("JARVIS_LLM_TIMEOUT")
+MAX_RETRIES = config.get_int("JARVIS_LLM_RETRIES")
 
 # Only chat/completions models are supported by this client. If a configured
 # model isn't in this set we warn once and fall back (responses/anthropic
@@ -94,28 +96,28 @@ def _supported(model: str) -> str:
 def pick_route(prompt: str) -> Route:
     p = prompt.lower()
     # Local Ollama is OFF by default (set JARVIS_LOCAL_OK=1 to enable)
-    prefer_local = os.getenv("JARVIS_LOCAL_OK", "0") == "1"
+    prefer_local = config.get_bool("JARVIS_LOCAL_OK")
     # Code intent is checked BEFORE generic action verbs so "write a
     # function" goes to the code model, not the generic cloud model.
     if _has_keyword(p, CODE_KEYWORDS):
         return Route("cloud",
-                     _supported(os.getenv("JARVIS_CODE_MODEL", DEFAULT_CODE_MODEL)),
+                     _supported(config.get("JARVIS_CODE_MODEL")),
                      "code task -> cloud code model")
     if needs_tools(prompt):
         return Route("cloud",
-                     _supported(os.getenv("JARVIS_CLOUD_MODEL", DEFAULT_CLOUD_MODEL)),
+                     _supported(config.get("JARVIS_CLOUD_MODEL")),
                      "action/tool task -> cloud")
     if _has_keyword(p, HARD_KEYWORDS) or any(s in p for s in HARD_PHRASES) \
             or len(prompt) > 800:
         return Route("cloud",
-                     _supported(os.getenv("JARVIS_CLOUD_MODEL", DEFAULT_CLOUD_MODEL)),
+                     _supported(config.get("JARVIS_CLOUD_MODEL")),
                      "complex task -> cloud smart model")
     if prefer_local:
         return Route("local",
-                     os.getenv("JARVIS_LOCAL_MODEL", DEFAULT_LOCAL_MODEL),
+                     config.get("JARVIS_LOCAL_MODEL"),
                      "simple task -> local ollama")
     return Route("cloud",
-                 _supported(os.getenv("JARVIS_CLOUD_MODEL", DEFAULT_CLOUD_MODEL)),
+                 _supported(config.get("JARVIS_CLOUD_MODEL")),
                  "default -> cloud")
 
 
@@ -169,7 +171,7 @@ class LLM:
             client = self._cloud_client()
             if client is None:
                 route = Route("local",
-                             os.getenv("JARVIS_LOCAL_MODEL", DEFAULT_LOCAL_MODEL),
+                             config.get("JARVIS_LOCAL_MODEL"),
                              "no cloud key -> falling back to local")
                 if not _ollama_up():
                     raise RuntimeError(

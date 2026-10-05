@@ -1,0 +1,110 @@
+"""Central configuration: one source of defaults, typed accessors, validation.
+
+Env var NAMES are unchanged, so an existing .env keeps working. Modules should
+read tunables through here rather than scattering `os.getenv(..., "default")`
+literals, so defaults live in one place and can be validated at startup.
+
+Accessors read the environment live (env changes at runtime are honoured).
+"""
+import os
+
+# ---- single source of documented defaults ----
+DEFAULTS = {
+    # routing / models
+    "JARVIS_NAME": "Optimus",
+    "JARVIS_WHISPER_MODEL": "base",
+    "JARVIS_CLOUD_MODEL": "longcat-2.5-preview-free",
+    "JARVIS_CLOUD_FALLBACK": "mimo-v2.6-flash",
+    "JARVIS_CODE_MODEL": "kimi-k2.7-code",
+    "JARVIS_LOCAL_MODEL": "llama3.2:3b",
+    "JARVIS_LOCAL_OK": "0",
+    "JARVIS_LLM_TIMEOUT": "60",
+    "JARVIS_LLM_RETRIES": "2",
+    "JARVIS_CLOUD_COOLDOWN": "90",
+    "JARVIS_MAX_STEPS": "12",
+    # wake word
+    "JARVIS_WAKE_WORDS": "hey_soundwave",
+    "JARVIS_WAKE_THRESHOLD": "0.7",
+    "JARVIS_WAKE_DEBOUNCE": "1",
+    "JARVIS_WAKE_CHUNK_MS": "1200",
+    "JARVIS_WAKE_ENERGY_MIN": "1000",
+    # voice / STT
+    "JARVIS_MIC_GAIN": "1.0",
+    "JARVIS_STT_COMPUTE": "int8",
+    "JARVIS_STT_THREADS": "4",
+    "JARVIS_STT_END_SILENCE": "1800",
+    "JARVIS_STT_ENERGY_MULT": "1.0",
+    "JARVIS_STT_GATE_MAX": "6000",
+    "JARVIS_STT_TAIL": "0.35",
+    "JARVIS_STT_MAX_NO_SPEECH": "0.6",
+    "JARVIS_STT_MIN_LOGPROB": "-1.0",
+    # tts
+    "JARVIS_TTS_VOICE": "en-US-AndrewMultilingualNeural",
+    "JARVIS_TTS_RATE": "+0%",
+    # memory / facts
+    "JARVIS_MEMORY_MAX_DIST": "0.55",
+    "JARVIS_MEMORY_MAX_ENTRIES": "500",
+    "JARVIS_FACTS_MAX": "100",
+    # ux
+    "JARVIS_FOLLOWUP": "1",
+    "JARVIS_FOLLOWUP_SECONDS": "6",
+    "JARVIS_GREET": "1",
+    "JARVIS_SOUNDS": "1",
+    "JARVIS_BARGE_IN": "0",
+}
+
+
+def get(name: str) -> str:
+    return os.getenv(name, DEFAULTS.get(name, ""))
+
+
+def get_int(name: str) -> int:
+    try:
+        return int(float(get(name)))
+    except (TypeError, ValueError):
+        return int(float(DEFAULTS.get(name, 0)))
+
+
+def get_float(name: str) -> float:
+    try:
+        return float(get(name))
+    except (TypeError, ValueError):
+        return float(DEFAULTS.get(name, 0.0))
+
+
+def get_bool(name: str) -> bool:
+    return str(get(name)).strip().lower() in ("1", "true", "yes", "on")
+
+
+# Critical numeric settings and their sane ranges. validate() is called at
+# startup so a typo in .env is reported instead of silently using a default.
+_RANGES = {
+    "JARVIS_WAKE_THRESHOLD": (0.0, 1.0),
+    "JARVIS_WAKE_DEBOUNCE": (1, 10),
+    "JARVIS_WAKE_ENERGY_MIN": (0, 32767),
+    "JARVIS_STT_END_SILENCE": (200, 8000),
+    "JARVIS_STT_ENERGY_MULT": (0.1, 10.0),
+    "JARVIS_STT_GATE_MAX": (400, 32767),
+    "JARVIS_STT_MAX_NO_SPEECH": (0.0, 1.0),
+    "JARVIS_LLM_TIMEOUT": (5, 600),
+}
+
+
+def validate() -> list:
+    """Return a list of human-readable problems (empty = all good)."""
+    problems = []
+    for name, (lo, hi) in _RANGES.items():
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except ValueError:
+            problems.append(f"{name}={raw!r} is not numeric")
+            continue
+        if not (lo <= v <= hi):
+            problems.append(f"{name}={raw} out of range [{lo}, {hi}]")
+    # threshold/blink: a value that can never fire
+    if get_float("JARVIS_WAKE_THRESHOLD") <= 0:
+        problems.append("JARVIS_WAKE_THRESHOLD <= 0 will never fire")
+    return problems

@@ -7,6 +7,7 @@ from rich.panel import Panel
 from .router import LLM
 from .builtin_tools import TOOL_SCHEMAS, TOOL_FUNCS
 from .memory import Memory
+from . import config
 
 console = Console()
 
@@ -78,7 +79,7 @@ class Agent:
         # Tool budget: browser/system questions can legitimately take 8-10
         # calls (your machine, no xdotool installed, etc). Tunable via env.
         if max_steps is None:
-            max_steps = int(os.getenv("JARVIS_MAX_STEPS", "12"))
+            max_steps = config.get_int("JARVIS_MAX_STEPS")
         ctx = self.memory.query(user_input)
         msgs = list(self.history)
         if ctx:

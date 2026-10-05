@@ -165,6 +165,9 @@ jarvis/                      # python package
 ├── voice.py         # faster-whisper STT (int8, persistent) + edge-tts TTS
 ├── wake.py          # openWakeWord hotword (custom + ONNX + whisper fallback)
 ├── memory.py        # Chroma persistent memory (similarity-gated, pruned)
+├── facts.py         # durable user facts (facts.jsonl)
+├── config.py        # central settings + validation
+├── audio.py         # shared gain/energy/warning helpers
 ├── sounds.py        # ack/end chirps (generated, no assets)
 └── tools/
     ├── browser.py       # Playwright
@@ -172,11 +175,14 @@ jarvis/                      # python package
     ├── calendar.py      # CalDAV
     └── homeassistant.py # REST API
 
+tests/                       # pytest suite (offline: fake mic/player, no network)
 wake_models/                 # pre-trained wake-word verifiers (onnx + json)
 training/                    # wake-word training scripts (gen_positive, train_optimus)
 install_wake_models.py       # copies wake_models/ into openwakeword
 setup_email_pass.py          # helper: store email app-password in .env
 requirements.txt
+requirements-dev.txt
+pytest.ini
 .env.example
 LICENSE                      # MIT
 ```
@@ -198,6 +204,13 @@ python -m jarvis --query "turn off living room light"
 python -m jarvis --query "how many unread emails"
 python -m jarvis --query "open github.com and tell me what's trending"
 ```
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest          # offline; no mic, no API key needed
+```
+
 ## License
 
 MIT - see [LICENSE](LICENSE).

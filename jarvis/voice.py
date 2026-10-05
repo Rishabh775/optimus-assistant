@@ -20,6 +20,9 @@ import re
 import numpy as np
 
 from . import sounds
+from . import config
+from .audio import apply_gain as _apply_gain
+from .audio import silence_warnings as _silence_warnings
 
 VOICE_DEFAULT = "en-US-AndrewMultilingualNeural"  # most natural male; closest
 # to ChatGPT-style speech. Others to try (set JARVIS_TTS_VOICE):
@@ -45,14 +48,6 @@ if not PLAYER:
     else:
         PLAYER = "ffplay -hide_banner -loglevel error -nodisp -autoexit"
 
-
-def _apply_gain(audio: np.ndarray, gain: float) -> np.ndarray:
-    """Software gain for quiet built-in mics. Linear amplify + clip to int16 range."""
-    if gain == 1.0:
-        return audio
-    boosted = audio.astype(np.int32) * gain
-    return np.clip(boosted, -32768, 32767).astype(np.int16)
-
 _TTS_LOCK = threading.Lock()
 _TTS_STOP_EVENT = threading.Event()
 _CURRENT_PROCESS = None
@@ -62,15 +57,6 @@ _SPEAKING = threading.Event()   # set while our TTS is playing
 def is_speaking() -> bool:
     """True while the assistant is speaking (mic must stay closed)."""
     return _SPEAKING.is_set()
-
-
-def _silence_warnings():
-    """Re-apply noise filters. openwakeword/onnxruntime reset Python's warning
-    filters at import, which resurrects sounddevice's NumPy 2.5 spam and
-    subprocess ResourceWarnings. Call this at the top of hot audio paths."""
-    import warnings
-    warnings.filterwarnings("ignore", category=DeprecationWarning)
-    warnings.filterwarnings("ignore", category=ResourceWarning)
 
 # ---- Persistent STT (loaded once per process) ----
 _STT_MODELS = {}          # model_name -> engine object
@@ -100,8 +86,8 @@ def get_stt(model_name: str = None):
             _STT_MODELS[model_name] = WhisperModel(
                 model_name,
                 device="cpu",
-                compute_type=os.getenv("JARVIS_STT_COMPUTE", "int8"),
-                cpu_threads=int(os.getenv("JARVIS_STT_THREADS", "4")),
+                compute_type=config.get("JARVIS_STT_COMPUTE"),
+                cpu_threads=config.get_int("JARVIS_STT_THREADS"),
             )
         else:
             import whisper
@@ -165,7 +151,7 @@ def _calibrate_energy() -> int:
     if _ENERGY_GATE is None:
         import sounddevice as sd
         _silence_warnings()
-        gain = float(os.getenv("JARVIS_MIC_GAIN", "1.0"))
+        gain = config.get_float("JARVIS_MIC_GAIN")
         win = int(_SAMPLE_RATE * 0.1)   # 100ms windows
         n_win = 5                        # ~0.5s total
         try:
@@ -178,8 +164,8 @@ def _calibrate_energy() -> int:
             ambient_peak = float(np.median(peaks))
         except Exception:
             ambient_peak = 300.0
-        mult = float(os.getenv("JARVIS_STT_ENERGY_MULT", "1.0"))
-        gate_max = float(os.getenv("JARVIS_STT_GATE_MAX", "6000"))
+        mult = config.get_float("JARVIS_STT_ENERGY_MULT")
+        gate_max = config.get_float("JARVIS_STT_GATE_MAX")
         _ENERGY_GATE = min(max(ambient_peak * mult, 400.0), gate_max)
         msg = (f"[stt] mic gate calibrated: {_ENERGY_GATE:.0f} "
                f"(ambient peak {ambient_peak:.0f}")
@@ -201,7 +187,7 @@ def _wait_for_quiet(max_wait: float = 30.0) -> None:
     while is_speaking() and waited < max_wait:
         time.sleep(0.1)
         waited += 0.1
-    time.sleep(float(os.getenv("JARVIS_STT_TAIL", "0.35")))
+    time.sleep(config.get_float("JARVIS_STT_TAIL"))
 
 
 def listen(timeout: int = 6, phrase_limit: int = 30,
@@ -222,14 +208,14 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
     # How long a mid-speech pause is tolerated before deciding you finished.
     # Too low cuts users off mid-question while they think; ~1.5-2s feels
     # natural (cost: that much extra latency after you stop speaking).
-    end_silence_ms = int(os.getenv("JARVIS_STT_END_SILENCE", "2200"))
+    end_silence_ms = config.get_int("JARVIS_STT_END_SILENCE")
     max_chunks = int(phrase_limit * 1000 / chunk_ms)
     wait_chunks = int(timeout * 1000 / chunk_ms)
 
     name = os.getenv("JARVIS_NAME", "OPTIMUS")
     print(f"[{name}] listening...")
     frames, voiced, quiet_run, waited = [], False, 0, 0
-    gain = float(os.getenv("JARVIS_MIC_GAIN", "1.0"))
+    gain = config.get_float("JARVIS_MIC_GAIN")
     try:
         with sd.InputStream(samplerate=_SAMPLE_RATE, channels=1,
                             dtype="int16", blocksize=chunk) as stream:
@@ -274,8 +260,8 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
             # gate already confirmed speech, so retry once without VAD
             text, lp, nsp = _transcribe_scored(audio, model_name, vad=False)
         if text:
-            max_nsp = float(os.getenv("JARVIS_STT_MAX_NO_SPEECH", "0.6"))
-            min_lp = float(os.getenv("JARVIS_STT_MIN_LOGPROB", "-1.0"))
+            max_nsp = config.get_float("JARVIS_STT_MAX_NO_SPEECH")
+            min_lp = config.get_float("JARVIS_STT_MIN_LOGPROB")
             # Confidence gate: reject silence/noise decodes. Following
             # faster-whisper's rule, a confident decode is never rejected for
             # low logprob alone -- both must look bad.
@@ -374,8 +360,8 @@ def _tts_player_args() -> list:
 def speak(text: str, blocking: bool = True):
     name = os.getenv("JARVIS_NAME", "OPTIMUS")
     text = _clean_for_tts(text)
-    voice = os.getenv("JARVIS_TTS_VOICE", VOICE_DEFAULT)
-    rate = os.getenv("JARVIS_TTS_RATE", "+0%")
+    voice = config.get("JARVIS_TTS_VOICE") or VOICE_DEFAULT
+    rate = config.get("JARVIS_TTS_RATE")
     _TTS_STOP_EVENT.clear()
     shown = threading.Event()
 

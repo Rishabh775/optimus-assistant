@@ -11,9 +11,11 @@ import os
 import time
 from pathlib import Path
 
+from . import config
+
 DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", Path.home() / "jarvis" / "data"))
 FACTS = DATA_DIR / "facts.jsonl"
-MAX = int(os.getenv("JARVIS_FACTS_MAX", "100"))
+MAX = config.get_int("JARVIS_FACTS_MAX")
 
 
 def _load() -> list:

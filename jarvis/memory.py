@@ -10,14 +10,15 @@ import os
 import time
 from pathlib import Path
 import chromadb
+from . import config
 from chromadb.utils import embedding_functions
 
 
 DATA_DIR = Path(os.getenv("JARVIS_DATA_DIR", Path.home() / "jarvis" / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_DIST = float(os.getenv("JARVIS_MEMORY_MAX_DIST", "0.55"))   # cosine distance
-RETENTION = int(os.getenv("JARVIS_MEMORY_MAX_ENTRIES", "500"))
+MAX_DIST = config.get_float("JARVIS_MEMORY_MAX_DIST")   # cosine distance
+RETENTION = config.get_int("JARVIS_MEMORY_MAX_ENTRIES")
 MIN_CHARS = int(os.getenv("JARVIS_MEMORY_MIN_CHARS", "20"))
 
 

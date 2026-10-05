@@ -28,10 +28,11 @@ from rich.prompt import Prompt
 from .agent import Agent
 from .voice import speak, listen, stop_tts
 from . import sounds
+from . import config
 import time
 
 console = Console()
-NAME = os.getenv("JARVIS_NAME", "Optimus").upper()
+NAME = config.get("JARVIS_NAME").upper()
 
 
 def text_loop(agent: Agent):
@@ -104,7 +105,7 @@ def hotkey_loop(agent: Agent):
         if q:
             ans = agent.ask(q)
             speak(ans)
-            if os.getenv("JARVIS_FOLLOWUP", "1") == "1":
+            if config.get_bool("JARVIS_FOLLOWUP"):
                 _followup_loop(agent, last_answer=ans)  # continued conversation
 
     target = _parse_hotkey(os.getenv("JARVIS_HOTKEY", "ctrl+alt+j"))
@@ -164,7 +165,7 @@ def _speak_with_interrupt(text: str, agent: Agent):
     With voice-only hardware there's no keyboard to press anyway.
     """
     stop_flag = threading.Event()
-    if os.getenv("JARVIS_BARGE_IN", "0") == "1" and _stdin_watchable():
+    if config.get_bool("JARVIS_BARGE_IN") and _stdin_watchable():
         monitor = threading.Thread(target=_interrupt_monitor,
                                    args=(agent, stop_flag), daemon=True)
         monitor.start()
@@ -227,7 +228,7 @@ def _greet():
     so a long greeting delays when your command can start.
     Set JARVIS_GREET=0 to skip; customize with JARVIS_GREETINGS="a|b|c".
     """
-    if os.getenv("JARVIS_GREET", "1") != "1":
+    if not config.get_bool("JARVIS_GREET"):
         return
     pool = os.getenv("JARVIS_GREETINGS", "")
     choices = [g.strip() for g in pool.split("|") if g.strip()] or DEFAULT_GREETINGS
@@ -245,7 +246,7 @@ def _followup_loop(agent: Agent, last_answer: str = ""):
     The window resets after every exchange.
     """
     from .voice import listen
-    window = float(os.getenv("JARVIS_FOLLOWUP_SECONDS", "6"))
+    window = config.get_float("JARVIS_FOLLOWUP_SECONDS")
     spoken = last_answer
     while True:
         q = listen(timeout=window, phrase_limit=30)
@@ -267,7 +268,7 @@ def _followup_loop(agent: Agent, last_answer: str = ""):
 
 def wake_loop(agent: Agent):
     from .wake import wait_for_wake, listen_after_wake
-    phrases = os.getenv("JARVIS_WAKE_WORDS", "hey_jarvis").replace("_", " ").split(",")
+    phrases = config.get("JARVIS_WAKE_WORDS").replace("_", " ").split(",")
     console.print(f"[bold cyan]{NAME} (wake mode)[/bold cyan] - say '{phrases[0]}' then your query")
     console.print("[dim]Press ENTER during speech to interrupt[/dim]")
     while True:
@@ -285,7 +286,7 @@ def wake_loop(agent: Agent):
                 ans = agent.ask(q)
                 if not _speak_with_interrupt(ans, agent):
                     pass
-                if os.getenv("JARVIS_FOLLOWUP", "1") == "1":
+                if config.get_bool("JARVIS_FOLLOWUP"):
                     _followup_loop(agent, last_answer=ans)  # continued conversation
         except KeyboardInterrupt:
             break
@@ -299,6 +300,9 @@ def main():
                    default="text")
     p.add_argument("--query", help="one-shot query")
     args = p.parse_args()
+
+    for problem in config.validate():
+        console.print(f"[yellow]config warning:[/yellow] {problem}")
 
     agent = Agent()
 

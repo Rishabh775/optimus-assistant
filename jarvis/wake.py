@@ -11,6 +11,12 @@ import json
 from pathlib import Path
 import numpy as np
 
+from .audio import apply_gain as _apply_gain
+from .audio import energy_gate as _energy_gate
+from .audio import mic_gain as _mic_gain
+from .audio import silence_warnings as _silence_warnings
+from . import config
+
 _MODEL_DIR = Path(os.getenv(
     "JARVIS_WAKE_MODELS_DIR",
     str(Path(os.path.dirname(__file__)).parent
@@ -108,30 +114,12 @@ def _name() -> str:
 
 
 def _threshold() -> float:
-    return float(os.getenv("JARVIS_WAKE_THRESHOLD", "0.7"))
+    return config.get_float("JARVIS_WAKE_THRESHOLD")
 
 
 def _debounce_frames() -> int:
     """Number of consecutive frames above threshold to confirm wake."""
-    return int(os.getenv("JARVIS_WAKE_DEBOUNCE", "3"))
-
-
-def _apply_gain(audio: np.ndarray, gain: float) -> np.ndarray:
-    """Gain for quiet built-in mics. Applied to the ENERGY gate only -- not the
-    classifier input, since openwakeword was trained on real-world mic audio."""
-    if gain == 1.0:
-        return audio
-    boosted = audio.astype(np.int32) * gain
-    return np.clip(boosted, -32768, 32767).astype(np.int16)
-
-
-def _mic_gain() -> float:
-    return float(os.getenv("JARVIS_MIC_GAIN", "1.0"))
-
-
-def _energy_gate(audio: np.ndarray, threshold: int = 1000) -> bool:
-    """Skip inference if audio is too quiet (CPU saver + false-positive filter)."""
-    return np.abs(_apply_gain(audio, _mic_gain())).max() > threshold
+    return config.get_int("JARVIS_WAKE_DEBOUNCE")
 
 
 def wait_for_wake(threshold: float = None, chunk: int = 1280):
@@ -145,8 +133,7 @@ def wait_for_wake(threshold: float = None, chunk: int = 1280):
     while is_speaking():
         time.sleep(0.1)
     time.sleep(0.3)  # speaker tail margin
-    words = os.getenv("JARVIS_WAKE_WORDS",
-                      ",".join(_DEFAULT_WORDS)).split(",")
+    words = config.get("JARVIS_WAKE_WORDS").split(",")
     if threshold is None:
         threshold = _threshold()
     if _has_onnx(words):
@@ -160,7 +147,6 @@ def wait_for_wake(threshold: float = None, chunk: int = 1280):
 def _wait_onnx(words: list, threshold: float, chunk: int):
     import sounddevice as sd
     import time
-    from .voice import _silence_warnings
     _silence_warnings()
     model = _load_onnx()
     sample_rate = 16000
@@ -186,12 +172,11 @@ def _wait_onnx(words: list, threshold: float, chunk: int):
 def _wait_custom(threshold: float = 0.7):
     """Custom-trained classifier with silence gate + debouncing + adaptive buffer."""
     import sounddevice as sd
-    from .voice import _silence_warnings
     _silence_warnings()
     sample_rate = 16000
-    chunk_ms = int(os.getenv("JARVIS_WAKE_CHUNK_MS", "1600"))
+    chunk_ms = config.get_int("JARVIS_WAKE_CHUNK_MS")
     chunk_samples = int(sample_rate * chunk_ms / 1000)
-    energy_min = int(os.getenv("JARVIS_WAKE_ENERGY_MIN", "1000"))
+    energy_min = config.get_int("JARVIS_WAKE_ENERGY_MIN")
     debounce_n = _debounce_frames()
     af = _CUSTOM_AF
     meta = _CUSTOM_META
