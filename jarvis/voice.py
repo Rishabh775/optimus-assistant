@@ -218,6 +218,16 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
     print(f"[{name}] listening...")
     frames, voiced, quiet_run, waited = [], False, 0, 0
     gain = config.get_float("JARVIS_MIC_GAIN")
+    # Hysteresis + adaptive stop threshold: the (higher) gate decides when you
+    # START talking; once talking, capture ends only when audio drops well below
+    # YOUR speech level (ref), not below the room gate. This stops the "cuts me
+    # off mid-sentence" behaviour on soft syllables / short pauses.
+    stop_ratio = config.get_float("JARVIS_STT_STOP_RATIO")
+    stop_floor = config.get_float("JARVIS_STT_STOP_FLOOR")
+    min_speech_chunks = max(
+        1, int(config.get_float("JARVIS_STT_MIN_SPEECH") * 1000 / chunk_ms))
+    ref = 0.0
+    speech_chunks = 0
     try:
         with sd.InputStream(samplerate=_SAMPLE_RATE, channels=1,
                             dtype="int16", blocksize=chunk) as stream:
@@ -238,9 +248,14 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
                     if peak < gate:
                         continue
                     voiced = True  # speech started
+                    ref = float(peak)
+                    speech_chunks = 1
                     quiet_run = 0
                 else:
-                    if peak < gate:
+                    speech_chunks += 1
+                    ref = max(float(peak), ref * 0.98)   # track speech level
+                    stop_gate = max(stop_floor, ref * stop_ratio)
+                    if peak < stop_gate and speech_chunks >= min_speech_chunks:
                         quiet_run += 1
                         if quiet_run * chunk_ms >= end_silence_ms:
                             break  # end of speech

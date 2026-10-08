@@ -116,6 +116,8 @@ into `wake_models/`, run `python install_wake_models.py`, then set
 | `JARVIS_CLOUD_COOLDOWN` | `90`s | after a cloud failure, use the fallback for this long (circuit breaker) |
 | `JARVIS_STT_ENERGY_MULT` | `1.0` | peak-based mic gate (matches wake scale); floor 400 — soft speech stays "voiced" |
 | `JARVIS_STT_GATE_MAX` | `6000` | gate ceiling; ambient is a median (transient-proof) so a loud moment can't make it deaf |
+| `JARVIS_STT_STOP_RATIO` | `0.35` | hysteresis: capture ends only when audio drops below this fraction of your speech level — raise if it cuts you off mid-sentence |
+| `JARVIS_STT_MIN_SPEECH` | `0.5`s | ignore end-of-speech until at least this much speech is captured |
 | `JARVIS_STT_TAIL` | `0.35`s | silence after TTS stops before sampling/calibrating (speaker tail margin) |
 | `JARVIS_STT_COMPUTE` | `int8` | faster-whisper compute type |
 | `JARVIS_STT_THREADS` | `4` | faster-whisper CPU threads |

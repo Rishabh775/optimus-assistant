@@ -112,3 +112,33 @@ def test_speak_interrupted_retires_threads(fake_audio_out):
     time.sleep(0.2)
     assert fake_audio_out.overlaps == 0
     assert threading.active_count() <= base + 1
+
+
+def _capture_dur(fake_mic, monkeypatch):
+    """Run listen() and return the captured duration in seconds."""
+    monkeypatch.setattr(voice, "_calibrate_energy", lambda: voice._ENERGY_GATE)
+    monkeypatch.setattr(voice, "sounds",
+                        type("S", (), {"end": staticmethod(lambda: None)}))
+    box = {}
+    def scored(a, m=None, vad=True):
+        box["dur"] = len(a) / 16000.0
+        return ("text", -0.2, 0.1)
+    monkeypatch.setattr(voice, "_transcribe_scored", scored)
+    voice.listen(timeout=2)
+    return box.get("dur", 0.0)
+
+
+def test_hysteresis_survives_soft_dip(fake_mic, monkeypatch):
+    # loud room: gate 2000; speech 4000; a soft dip to 1500 for 2.5s mid-sentence
+    voice._ENERGY_GATE = 2000
+    fake_mic.script = [("Q", 3), (4000, 5), (1500, 25), (4000, 3), ("Q", 40)]
+    dur = _capture_dur(fake_mic, monkeypatch)
+    # the dip alone is 2.5s; proving capture continued through it (old code cut ~1.1s)
+    assert dur > 2.5, dur
+
+
+def test_hysteresis_still_stops_on_silence(fake_mic, monkeypatch):
+    voice._ENERGY_GATE = 1000
+    fake_mic.script = [(3000, 10), ("Q", 60)]   # speech then real silence
+    dur = _capture_dur(fake_mic, monkeypatch)
+    assert 0.8 < dur < 2.5, dur   # ends ~1s of speech + end-silence (300ms test)

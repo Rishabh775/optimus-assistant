@@ -64,7 +64,12 @@ class MockMic:
             def read(self, n):
                 kind = chunks[state["i"]] if state["i"] < len(chunks) else "Q"
                 state["i"] += 1
-                peak = 8000 if kind == "S" else 60
+                if isinstance(kind, (int, float)):
+                    peak = int(kind)          # explicit amplitude
+                elif kind == "S":
+                    peak = 8000
+                else:                          # "Q" = quiet room
+                    peak = 60
                 arr = np.full(n, peak, dtype=np.int16)
                 return arr.reshape(-1, 1), False
             def __enter__(self):
