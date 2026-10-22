@@ -28,6 +28,9 @@ def test_tool_registry_parity():
     assert len(bt.TOOL_FUNCS) == len(bt.TOOL_SCHEMAS)
     assert "remember_fact" in bt.TOOL_FUNCS
     assert "self_status" in bt.TOOL_FUNCS
+    for t in ("browser_click", "browser_type", "browser_press", "browser_back",
+              "browser_links", "browser_wait", "browser_scroll", "browser_close"):
+        assert t in bt.TOOL_FUNCS
 
 
 # ---- shell sandbox ----
@@ -92,18 +95,33 @@ def test_self_status_runs():
     ("shell_run", {"cmd": "pip install foo"}),
     ("email_send", {"to": "a@b.com", "subject": "s", "body": "b"}),
     ("write_file", {"path": "existing_overwrite_test.txt", "content": "x"}),
+    ("write_file", {"path": os.path.expanduser("~/jarvis_outside_ws.txt"),
+                    "content": "x"}),
+    ("browser_type", {"selector": "#q", "text": "hello"}),
+    ("browser_type", {"selector": "#q", "text": "hello", "submit": True}),
+    ("browser_press", {"key": "Enter"}),
 ])
 def test_needs_confirmation_flags(fn, args):
-    if fn == "write_file":
+    if fn == "write_file" and args["path"] == "existing_overwrite_test.txt":
         # create the target first so it counts as an overwrite
         bt.write_file("existing_overwrite_test.txt", "old")
     assert bt.needs_confirmation(fn, args) is not None
+
+
+def test_home_writes_are_mandatory_confirmation():
+    home_target = os.path.expanduser("~/jarvis_outside_ws.txt")
+    assert bt.confirmation_is_mandatory("write_file", {"path": home_target})
+    assert not bt.confirmation_is_mandatory("write_file", {"path": "notes.txt"})
+    assert not bt.confirmation_is_mandatory("shell_run", {"cmd": "ls"})
 
 
 @pytest.mark.parametrize("fn,args", [
     ("shell_run", {"cmd": "ls -la"}),
     ("shell_run", {"cmd": "echo hi"}),
     ("read_file", {"path": "README.md"}),
+    ("browser_press", {"key": "Tab"}),
+    ("browser_click", {"target": "Sign in"}),
+    ("browser_links", {}),
 ])
 def test_needs_confirmation_allows(fn, args):
     assert bt.needs_confirmation(fn, args) is None

@@ -12,9 +12,9 @@ import os
 DEFAULTS = {
     # routing / models
     "JARVIS_NAME": "Optimus",
-    "JARVIS_WHISPER_MODEL": "base",
-    "JARVIS_CLOUD_MODEL": "longcat-2.5-preview-free",
-    "JARVIS_CLOUD_FALLBACK": "mimo-v2.6-flash",
+    "JARVIS_WHISPER_MODEL": "small.en",
+    "JARVIS_CLOUD_MODEL": "glm-5.3-flash",
+    "JARVIS_CLOUD_FALLBACK": "deepseek-v4-flash",
     "JARVIS_CODE_MODEL": "kimi-k2.7-code",
     "JARVIS_LOCAL_MODEL": "llama3.2:3b",
     "JARVIS_LOCAL_OK": "0",
@@ -32,9 +32,15 @@ DEFAULTS = {
     "JARVIS_MIC_GAIN": "1.0",
     "JARVIS_STT_COMPUTE": "int8",
     "JARVIS_STT_THREADS": "4",
+    "JARVIS_STT_LANGUAGE": "en",
+    "JARVIS_STT_BEAM_SIZE": "5",
+    "JARVIS_STT_INITIAL_PROMPT": (
+        "Voice commands to a local assistant about files, folders, HTML, CSS, "
+        "JavaScript, DOM manipulation, workspace, email, calendar."),
+    "JARVIS_STT_HOTWORDS": "DOM manipulation HTML CSS JavaScript workspace",
     "JARVIS_STT_END_SILENCE": "1800",
     "JARVIS_STT_ENERGY_MULT": "1.0",
-    "JARVIS_STT_GATE_MAX": "6000",
+    "JARVIS_STT_GATE_MAX": "15000",
     "JARVIS_STT_STOP_RATIO": "0.35",
     "JARVIS_STT_STOP_FLOOR": "120",
     "JARVIS_STT_MIN_SPEECH": "0.5",
@@ -44,6 +50,9 @@ DEFAULTS = {
     # tts
     "JARVIS_TTS_VOICE": "en-US-AndrewMultilingualNeural",
     "JARVIS_TTS_RATE": "+0%",
+    "JARVIS_TTS_EFFECT": "off",
+    "JARVIS_TTS_FALLBACK": "piper",
+    "JARVIS_PIPER_MODEL": "",
     # memory / facts
     "JARVIS_MEMORY_MAX_DIST": "0.55",
     "JARVIS_MEMORY_MAX_ENTRIES": "500",
@@ -53,8 +62,23 @@ DEFAULTS = {
     "JARVIS_FOLLOWUP_SECONDS": "6",
     "JARVIS_GREET": "1",
     "JARVIS_SOUNDS": "1",
-    "JARVIS_BARGE_IN": "0",
+    "JARVIS_BARGE_IN": "1",
     "JARVIS_CONFIRM": "1",
+    # JARVIS_AUTO=1: run everything without asking (skips ALL confirmations,
+    # including mandatory ones). Hard tool blocks (blocklist, secret-file
+    # reads) still apply. Use only on a trusted setup.
+    "JARVIS_AUTO": "0",
+    # phone-app server (python -m jarvis.server)
+    "JARVIS_APP_HOST": "0.0.0.0",
+    "JARVIS_APP_PORT": "8080",
+    "JARVIS_APP_CONFIRM_TIMEOUT": "120",
+    # SQLite chat store (relative to the repo root); JARVIS_APP_DB="" keeps
+    # history in RAM only (wallet, sessions die with the process).
+    "JARVIS_APP_DB": "data/phone-app/chats.db",
+    # JARVIS_APP_TOKEN is generated into .env on first run if unset.
+    # persona of the assistant: soundwave | jarvis | glados | off
+    # (or free text: any other value is used verbatim as a personality hint)
+    "JARVIS_PERSONALITY": "off",
 }
 
 

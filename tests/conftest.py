@@ -29,6 +29,12 @@ os.environ.update({
     "JARVIS_STT_END_SILENCE": "300",   # keep tests fast
     "JARVIS_STT_TAIL": "0",
     "JARVIS_FACTS_MAX": "100",
+    # isolation knobs (real .env may leak in via __main__.load_dotenv when
+    # other test modules import it -- pin the defaults here):
+    "JARVIS_AUTO": "0",
+    "JARVIS_CONFIRM": "1",
+    "JARVIS_TTS_EFFECT": "off",
+    "JARVIS_PERSONALITY": "off",
 })
 
 

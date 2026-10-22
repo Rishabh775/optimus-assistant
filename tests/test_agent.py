@@ -1,4 +1,6 @@
 """Agent tool loop: confirmation gating of consequential actions."""
+import json
+import os
 from types import SimpleNamespace
 
 from jarvis import builtin_tools as bt
@@ -54,10 +56,11 @@ def _agent(confirm, tool_name, tool_args):
 
 
 def test_denied_blocks_tool(monkeypatch):
+    monkeypatch.delenv("JARVIS_AUTO", raising=False)
     ran = {"n": 0}
     monkeypatch.setitem(bt.TOOL_FUNCS, "shell_run",
                         lambda **k: ran.__setitem__("n", ran["n"] + 1) or "ran")
-    a = _agent(confirm=lambda reason, fn, args: False,
+    a = _agent(confirm=lambda reason, fn, args, mandatory=False: False,
                tool_name="shell_run", tool_args='{"cmd": "rm -rf build"}')
     a.ask("delete build")
     assert ran["n"] == 0            # not executed
@@ -67,7 +70,7 @@ def test_confirmed_runs_tool(monkeypatch):
     ran = {"n": 0}
     monkeypatch.setitem(bt.TOOL_FUNCS, "shell_run",
                         lambda **k: ran.__setitem__("n", ran["n"] + 1) or "ran")
-    a = _agent(confirm=lambda reason, fn, args: True,
+    a = _agent(confirm=lambda reason, fn, args, mandatory=False: True,
                tool_name="shell_run", tool_args='{"cmd": "rm -rf build"}')
     a.ask("delete build")
     assert ran["n"] == 1
@@ -89,3 +92,83 @@ def test_safe_command_not_gated(monkeypatch):
                tool_name="shell_run", tool_args='{"cmd": "ls -la"}')
     a.ask("list files")
     assert asked["n"] == 0          # safe -> no prompt
+
+
+def test_out_of_workspace_write_denied_without_hook(monkeypatch):
+    monkeypatch.delenv("JARVIS_AUTO", raising=False)
+    ran = {"n": 0}
+    monkeypatch.setitem(bt.TOOL_FUNCS, "write_file",
+                        lambda **k: ran.__setitem__("n", ran["n"] + 1) or "wrote")
+    target = os.path.expanduser("~/jarvis_agent_out_of_ws.txt")
+    a = _agent(confirm=None, tool_name="write_file",
+               tool_args=json.dumps({"path": target, "content": "x"}))
+    a.ask("write a file")
+    assert ran["n"] == 0            # mandatory action, no hook -> denied
+
+
+def test_out_of_workspace_write_runs_when_confirmed(monkeypatch):
+    ran = {"n": 0}
+    monkeypatch.setitem(bt.TOOL_FUNCS, "write_file",
+                        lambda **k: ran.__setitem__("n", ran["n"] + 1) or "wrote")
+    target = os.path.expanduser("~/jarvis_agent_out_of_ws.txt")
+    a = _agent(confirm=lambda *x: True, tool_name="write_file",
+               tool_args=json.dumps({"path": target, "content": "x"}))
+    a.ask("write a file")
+    assert ran["n"] == 1
+
+
+def test_workspace_write_not_gated(monkeypatch):
+    asked = {"n": 0}
+    monkeypatch.setitem(bt.TOOL_FUNCS, "write_file", lambda **k: "wrote")
+    a = _agent(confirm=lambda *x: asked.__setitem__("n", asked["n"] + 1) or True,
+               tool_name="write_file",
+               tool_args='{"path": "agent_tmp_newfile_xyz.txt", "content": "x"}')
+    a.ask("write a file")
+    assert asked["n"] == 0          # workspace -> no prompt
+
+
+def test_auto_mode_bypasses_confirmation(monkeypatch):
+    monkeypatch.setenv("JARVIS_AUTO", "1")
+    ran = {"n": 0}
+    monkeypatch.setitem(bt.TOOL_FUNCS, "write_file",
+                        lambda **k: ran.__setitem__("n", ran["n"] + 1) or "wrote")
+    target = os.path.expanduser("~/jarvis_agent_out_of_ws.txt")
+    a = _agent(confirm=lambda *x: False, tool_name="write_file",
+               tool_args=json.dumps({"path": target, "content": "x"}))
+    a.ask("write a file")
+    assert ran["n"] == 1            # mandatory + hooked, but AUTO overrides
+
+
+def test_auto_mode_bypasses_denying_hook(monkeypatch):
+    monkeypatch.setenv("JARVIS_AUTO", "1")
+    ran = {"n": 0}
+    monkeypatch.setitem(bt.TOOL_FUNCS, "shell_run",
+                        lambda **k: ran.__setitem__("n", ran["n"] + 1) or "ran")
+    a = _agent(confirm=lambda *x: False, tool_name="shell_run",
+               tool_args='{"cmd": "rm -rf build"}')
+    a.ask("delete build")
+    assert ran["n"] == 1            # hook says no, AUTO wins
+
+
+def test_auto_slash_command_toggle(monkeypatch):
+    from jarvis import __main__ as jm
+    monkeypatch.delenv("JARVIS_AUTO", raising=False)
+    monkeypatch.setattr(jm.console, "print", lambda *a, **k: None)
+
+    consumed = jm._handle_auto_command("/auto")   # toggle -> on
+    assert consumed
+    assert os.environ.get("JARVIS_AUTO") == "1"
+
+    consumed = jm._handle_auto_command("/auto off")
+    assert consumed and os.environ.get("JARVIS_AUTO") == "0"
+
+    consumed = jm._handle_auto_command("/auto on")
+    assert consumed and os.environ.get("JARVIS_AUTO") == "1"
+
+    # non-command passes through
+    assert not jm._handle_auto_command("list files")
+
+
+def test_auto_slash_command_ignored_for_regular_text(monkeypatch):
+    from jarvis import __main__ as jm
+    assert not jm._handle_auto_command("what is 2+2")

@@ -35,30 +35,111 @@ console = Console()
 NAME = config.get("JARVIS_NAME").upper()
 
 
+def _mode_label() -> str:
+    return "auto" if config.get_bool("JARVIS_AUTO") else "ask"
+
+
+def _set_auto(on: bool):
+    """Live-switch confirmation mode in this process (env is read live)."""
+    os.environ["JARVIS_AUTO"] = "1" if on else "0"
+
+
+def _handle_auto_command(q: str) -> bool:
+    """Handle the /auto slash command in text mode. Returns True if consumed.
+
+    /auto        toggle
+    /auto on     auto-accept everything
+    /auto off    ask for confirmations
+    """
+    parts = q.strip().lower().split()
+    if not parts or parts[0] != "/auto":
+        return False
+    if len(parts) == 1 or parts[1] == "toggle":
+        on = not config.get_bool("JARVIS_AUTO")
+    elif parts[1] in ("on", "1", "true"):
+        on = True
+    elif parts[1] in ("off", "0", "false"):
+        on = False
+    else:
+        console.print("[red]/auto takes on | off[/red]")
+        return True
+    _set_auto(on)
+    console.print(f"[dim]confirmation mode ->[/dim] [bold]{_mode_label()}[/bold]")
+    return True
+
+
+def _auto_mode_listener():
+    """Global Shift+Tab listener while text mode runs (Claude Code style).
+
+    Toggling sets JARVIS_AUTO in this process, so every subsequent tool call
+    (any mode, self_status included) reflects it immediately. Hard safety
+    blocks (destructive shell blocklist, secret reads) are never affected.
+    """
+    from pynput import keyboard
+
+    shift = {"down": False}
+    mods = (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r)
+
+    def on_press(key):
+        if key in mods:
+            shift["down"] = True
+        elif key == keyboard.Key.tab and shift["down"]:
+            _set_auto(not config.get_bool("JARVIS_AUTO"))
+            console.print(
+                f"\n[dim](Shift+Tab) confirmation mode ->[/dim] "
+                f"[bold]{_mode_label()}[/bold]")
+
+    def on_release(key):
+        if key in mods:
+            shift["down"] = False
+
+    return keyboard.Listener(on_press=on_press, on_release=on_release)
+
+
 def text_loop(agent: Agent):
     console.print(f"[bold cyan]{NAME} (text mode)[/bold cyan] - type 'quit' to exit")
-    while True:
-        try:
-            q = Prompt.ask("[bold green]you[/bold green]")
-        except (EOFError, KeyboardInterrupt):
-            break
-        if q.strip().lower() in {"quit", "exit"}:
-            break
-        if not q.strip():
-            continue
-        ans = agent.ask(q)
-        console.print(f"[bold magenta]{NAME.lower()}[/bold magenta]: {ans}\n")
+    console.print(
+        f"[dim]confirmation mode: {_mode_label()}"
+        " -- Shift+Tab or /auto toggles (on|off)[/dim]")
+    try:
+        listener = _auto_mode_listener()
+        listener.start()
+    except Exception:
+        listener = None  # no keyboard access (ssh/headless): /auto still works
+    try:
+        while True:
+            try:
+                label = (f"[bold green]you[/bold green] "
+                         f"[dim]\\[{_mode_label()}][/dim]")
+                q = Prompt.ask(label)
+            except (EOFError, KeyboardInterrupt):
+                break
+            if q.strip().lower() in {"quit", "exit"}:
+                break
+            if _handle_auto_command(q):
+                continue
+            if not q.strip():
+                continue
+            ans = agent.ask(q)
+            console.print(f"[bold magenta]{NAME.lower()}[/bold magenta]: {ans}\n")
+    finally:
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass
 
 
 def voice_loop(agent: Agent):
     console.print(f"[bold cyan]{NAME} (voice mode)[/bold cyan] - Ctrl+C to exit")
+    console.print("[dim]Press ENTER during speech to interrupt[/dim]")
     while True:
         try:
             q = listen()
             if not q:
                 continue
             ans = agent.ask(q)
-            speak(ans)
+            _speak_with_interrupt(ans, agent)
         except KeyboardInterrupt:
             break
         except Exception as e:
@@ -104,7 +185,7 @@ def hotkey_loop(agent: Agent):
         q = listen()
         if q:
             ans = agent.ask(q)
-            speak(ans)
+            _speak_with_interrupt(ans, agent)
             if config.get_bool("JARVIS_FOLLOWUP"):
                 _followup_loop(agent, last_answer=ans)  # continued conversation
 
@@ -120,6 +201,7 @@ def hotkey_loop(agent: Agent):
 
     label = os.getenv("JARVIS_HOTKEY", "ctrl+alt+j").replace("+", "+")
     console.print(f"[bold cyan]{NAME} hotkey mode[/bold cyan] - press {label}")
+    console.print("[dim]Press ENTER during speech to interrupt[/dim]")
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
 
@@ -159,10 +241,10 @@ def _interrupt_monitor(agent: Agent, stop_flag: threading.Event):
 def _speak_with_interrupt(text: str, agent: Agent):
     """Speak text. Press Enter to interrupt (avoids mic feedback loop).
 
-    Opt-in via JARVIS_BARGE_IN=1. OFF by default: on a TTY terminal, stray
-    Enter keystrokes during TTS would kill the rest of the reply (a
-    reproducible bug -- text printed in full, audio cut after a few words).
-    With voice-only hardware there's no keyboard to press anyway.
+    On by default (JARVIS_BARGE_IN=1) and used by every speaking path. Set
+    JARVIS_BARGE_IN=0 to disable: on a TTY terminal a stray Enter during TTS
+    would otherwise cut the rest of the reply. Only active when stdin is a
+    real selectable terminal (see _stdin_watchable).
     """
     stop_flag = threading.Event()
     if config.get_bool("JARVIS_BARGE_IN") and _stdin_watchable():
@@ -220,6 +302,26 @@ DEFAULT_GREETINGS = [
     "Shoot.",
 ]
 
+# Same 1-3 word rule applies; per-personality pools (JARVIS_GREETINGS still
+# overrides them all with the custom pool).
+PERSONALITY_GREETINGS = {
+    "soundwave": [
+        "Speak.",
+        "Go ahead.",
+        "Listening.",
+        "Acknowledged.",
+        "Soundwave online.",
+        "Awaiting orders.",
+    ],
+    "jarvis": DEFAULT_GREETINGS,
+    "glados": [
+        "Hello.",
+        "I'm listening.",
+        "Testing.",
+        "Go ahead.",
+    ],
+}
+
 
 def _greet():
     """Short spoken greeting on wake (chirp = instant ack, this = personality).
@@ -230,8 +332,12 @@ def _greet():
     """
     if not config.get_bool("JARVIS_GREET"):
         return
-    pool = os.getenv("JARVIS_GREETINGS", "")
-    choices = [g.strip() for g in pool.split("|") if g.strip()] or DEFAULT_GREETINGS
+    pool_env = os.getenv("JARVIS_GREETINGS", "")
+    if pool_env:
+        choices = [g.strip() for g in pool_env.split("|") if g.strip()]
+    else:
+        persona = (config.get("JARVIS_PERSONALITY") or "").strip().lower()
+        choices = PERSONALITY_GREETINGS.get(persona, DEFAULT_GREETINGS)
     speak(random.choice(choices))
 
 
@@ -294,7 +400,8 @@ def wake_loop(agent: Agent):
             console.print(f"[red]error:[/red] {e}")
 
 
-def _voice_confirm(reason: str, fn_name: str, args: dict) -> bool:
+def _voice_confirm(reason: str, fn_name: str, args: dict,
+                   mandatory: bool = False) -> bool:
     """Ask for spoken confirmation before a consequential tool call."""
     speak(f"Confirmation needed: {reason}. Say yes to proceed.")
     ans = listen(timeout=6)
@@ -304,7 +411,8 @@ def _voice_confirm(reason: str, fn_name: str, args: dict) -> bool:
     return ok
 
 
-def _text_confirm(reason: str, fn_name: str, args: dict) -> bool:
+def _text_confirm(reason: str, fn_name: str, args: dict,
+                  mandatory: bool = False) -> bool:
     ans = Prompt.ask(f"[yellow]Confirm: {reason}?[/yellow]",
                      choices=["yes", "no"], default="no")
     return ans == "yes"

@@ -4,8 +4,12 @@ Security model:
 - shell_run: runs in WORKSPACE with a SCRUBBED environment (API keys,
   tokens, passwords removed) and a destructive-command blocklist
 - read_file: restricted to $HOME + /tmp; secrets (.env, keys, tokens) blocked
-- write_file: restricted to WORKSPACE by default (JARVIS_ALLOW_ANY_PATH=1
-  lifts to $HOME), never outside $HOME
+- write_file: restricted to WORKSPACE by default. With
+  JARVIS_ALLOW_HOME_WRITES=1 (default) writes anywhere under $HOME are allowed
+  but are MANDATORY-confirmation actions -- the agent asks before each write
+  outside WORKSPACE and REFUSES when no interactive prompt is available (e.g.
+  --query mode), so a prompt injection cannot silently write to your files.
+  Never writes outside $HOME.
 
 The blocklist is not a real sandbox. If the agent handles untrusted content
 (emails, web pages), a prompt injection can still reach shell_run; for
@@ -21,6 +25,12 @@ WORKSPACE = Path.home() / "jarvis" / "workspace"
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
 ALLOW_ANY_PATH = os.getenv("JARVIS_ALLOW_ANY_PATH", "0") == "1"
+
+# Writes outside WORKSPACE but inside $HOME are permitted, but only as a
+# MANDATORY-confirmation action (see confirmation_is_mandatory): the agent
+# asks first, and refuses when no interactive prompt is possible. Set
+# JARVIS_ALLOW_HOME_WRITES=0 to restore the old workspace-only write sandbox.
+ALLOW_HOME_WRITES = os.getenv("JARVIS_ALLOW_HOME_WRITES", "1") == "1"
 
 # Deceptive/destructive shell patterns (checked case-insensitively)
 _DANGER_PATTERNS = [
@@ -80,6 +90,18 @@ _RISKY_SHELL = re.compile(
     r"|>>?\s*\S", re.I)
 
 
+def _resolve_write(path: str) -> Path:
+    """Resolve a write target; relative paths land in WORKSPACE."""
+    p = Path(str(path)).expanduser()
+    if not p.is_absolute():
+        p = WORKSPACE / p
+    return p
+
+
+def _outside_workspace(p: Path) -> bool:
+    return not str(p).startswith(str(WORKSPACE))
+
+
 def needs_confirmation(fn_name: str, args: dict) -> str | None:
     """Return a human reason if this tool call should require confirmation,
     else None. Confirmation is asked by the interaction layer (voice/text)."""
@@ -92,13 +114,29 @@ def needs_confirmation(fn_name: str, args: dict) -> str | None:
         return None
     if fn_name == "email_send":
         return f"send an email to {args.get('to', '?')}"
+    if fn_name == "browser_type":
+        extra = " and submit the form" if args.get("submit") else ""
+        return f"type into a web form ({args.get('selector', '?')!r}){extra}"
+    if fn_name == "browser_press":
+        if str(args.get("key", "")).strip().lower() in ("enter", "return"):
+            return "submit a web form (press Enter)"
+        return None
     if fn_name == "write_file":
-        p = Path(str(args.get("path", ""))).expanduser()
-        if not p.is_absolute():
-            p = WORKSPACE / p
+        p = _resolve_write(args.get("path", ""))
+        if _outside_workspace(p):
+            return f"write outside the workspace to {p}"
         if p.exists():
             return f"overwrite the existing file {p}"
     return None
+
+
+def confirmation_is_mandatory(fn_name: str, args: dict) -> bool:
+    """Consequential actions that must NEVER run without a live user
+    confirmation. When no interactive prompt is available (e.g. --query mode),
+    the agent denies these instead of running them unconfirmed."""
+    if fn_name == "write_file":
+        return _outside_workspace(_resolve_write((args or {}).get("path", "")))
+    return False
 
 
 def shell_run(cmd: str, timeout: int = 30) -> str:
@@ -144,14 +182,12 @@ def read_file(path: str) -> str:
 
 
 def write_file(path: str, content: str) -> str:
-    p = Path(path).expanduser()
-    if not p.is_absolute():
-        p = WORKSPACE / p          # relative paths land in WORKSPACE
+    p = _resolve_write(path)
     in_ws = str(p).startswith(str(WORKSPACE))
     in_home = str(p).startswith(str(Path.home()) + "/")
-    if not in_ws and not (ALLOW_ANY_PATH and in_home):
+    if not in_ws and not (in_home and (ALLOW_HOME_WRITES or ALLOW_ANY_PATH)):
         return (f"BLOCKED: writes are limited to {WORKSPACE} "
-                f"(set JARVIS_ALLOW_ANY_PATH=1 for $HOME)")
+                f"(set JARVIS_ALLOW_HOME_WRITES=1 for confirmed $HOME writes)")
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
@@ -199,7 +235,7 @@ def self_status() -> str:
     except Exception:
         nfacts = 0
     return "\n".join([
-        f"assistant: {g('JARVIS_NAME', 'Optimus')}",
+        f"assistant: {g('JARVIS_NAME', 'Optimus')}  persona: {g('JARVIS_PERSONALITY', 'off')}",
         f"time: {datetime.datetime.now().isoformat(timespec='seconds')}",
         f"host: {platform.node()} ({platform.system()} {platform.machine()})",
         f"cloud model: {g('JARVIS_CLOUD_MODEL')}  fallback: {g('JARVIS_CLOUD_FALLBACK', 'mimo-v2.6-flash')}",
@@ -207,9 +243,10 @@ def self_status() -> str:
         f"code model: {g('JARVIS_CODE_MODEL')}",
         f"local model: {g('JARVIS_LOCAL_MODEL')} (enabled={g('JARVIS_LOCAL_OK', '0')})",
         f"wake word: {g('JARVIS_WAKE_WORDS', 'hey_optimus')} (threshold {g('JARVIS_WAKE_THRESHOLD', '0.7')}, debounce {g('JARVIS_WAKE_DEBOUNCE', '1')})",
-        f"tts voice: {g('JARVIS_TTS_VOICE')}  rate {g('JARVIS_TTS_RATE', '+0%')}",
+        f"tts voice: {g('JARVIS_TTS_VOICE')}  rate {g('JARVIS_TTS_RATE', '+0%')}  voice-pack effect: {g('JARVIS_TTS_EFFECT', 'off')}",
         f"cloud api key: {key}",
         f"tools: {len(TOOL_FUNCS)} registered",
+        f"confirm mode: {'AUTO - never asks' if g('JARVIS_AUTO', '0') == '1' else 'asking (JARVIS_CONFIRM=1)'}",
         f"durable facts: {nfacts} (facts.jsonl; separate from Chroma conversation memory)",
     ])
 
@@ -244,6 +281,46 @@ def browser_extract(url: str = "", max_chars: int = 4000) -> str:
 def browser_screenshot(path: str = "") -> str:
     from .tools.browser import web_screenshot
     return web_screenshot(path or None)
+
+
+def browser_click(target: str) -> str:
+    from .tools.browser import web_click
+    return web_click(target)
+
+
+def browser_type(selector: str, text: str, submit: bool = False) -> str:
+    from .tools.browser import web_type
+    return web_type(selector, text, submit)
+
+
+def browser_press(key: str) -> str:
+    from .tools.browser import web_press
+    return web_press(key)
+
+
+def browser_back() -> str:
+    from .tools.browser import web_back
+    return web_back()
+
+
+def browser_links(max_items: int = 40) -> str:
+    from .tools.browser import web_links
+    return web_links(max_items)
+
+
+def browser_wait(selector: str = "", ms: int = 1000) -> str:
+    from .tools.browser import web_wait
+    return web_wait(selector, ms)
+
+
+def browser_scroll(direction: str = "down", amount: int = 800) -> str:
+    from .tools.browser import web_scroll
+    return web_scroll(direction, amount)
+
+
+def browser_close() -> str:
+    from .tools.browser import web_close
+    return web_close()
 
 
 def email_list(n: int = 10, unread_only: bool = False) -> str:
@@ -408,6 +485,77 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "browser_click",
+        "description": "Click a link, button or element in the browser. target can be a CSS selector or the visible text/name. Use after browser_open or browser_links. Returns the resulting page.",
+        "parameters": {
+            "type": "object",
+            "properties": {"target": {"type": "string"}},
+            "required": ["target"],
+        },
+    },
+    {
+        "name": "browser_type",
+        "description": "Type text into a form field (input/textarea). selector can be a CSS selector, placeholder or label. Set submit=true to press Enter afterward. Requires user confirmation.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string"},
+                "text": {"type": "string"},
+                "submit": {"type": "boolean"},
+            },
+            "required": ["selector", "text"],
+        },
+    },
+    {
+        "name": "browser_press",
+        "description": "Send a keyboard key to the current page (Enter, Tab, Escape, PageDown).",
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "browser_back",
+        "description": "Go back to the previous page in the browser history.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "browser_links",
+        "description": "List clickable links on the current page (text + href) so you know what can be clicked.",
+        "parameters": {
+            "type": "object",
+            "properties": {"max_items": {"type": "integer"}},
+        },
+    },
+    {
+        "name": "browser_wait",
+        "description": "Wait for a selector to appear, or wait ms milliseconds (for slow/JS pages).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string"},
+                "ms": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "browser_scroll",
+        "description": "Scroll the current page up or down.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "direction": {"type": "string", "enum": ["down", "up"]},
+                "amount": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "browser_close",
+        "description": "Close the browser to free memory.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
         "name": "email_triage",
         "description": "Rank recent emails by deterministic importance (VIP senders + keyword weights) and explain why. Use for 'what's important in my email'.",
         "parameters": {
@@ -538,6 +686,14 @@ TOOL_FUNCS = {
     "browser_open": browser_open,
     "browser_extract": browser_extract,
     "browser_screenshot": browser_screenshot,
+    "browser_click": browser_click,
+    "browser_type": browser_type,
+    "browser_press": browser_press,
+    "browser_back": browser_back,
+    "browser_links": browser_links,
+    "browser_wait": browser_wait,
+    "browser_scroll": browser_scroll,
+    "browser_close": browser_close,
     "email_list": email_list,
     "email_triage": email_triage,
     "email_read": email_read,

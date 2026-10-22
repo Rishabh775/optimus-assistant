@@ -18,7 +18,7 @@ def test_typed_getters(monkeypatch):
 
 def test_defaults_used_when_unset(monkeypatch):
     monkeypatch.delenv("JARVIS_STT_GATE_MAX", raising=False)
-    assert config.get_float("JARVIS_STT_GATE_MAX") == 6000.0
+    assert config.get_float("JARVIS_STT_GATE_MAX") == 15000.0
 
 
 def test_bad_value_falls_back_not_crashes(monkeypatch):

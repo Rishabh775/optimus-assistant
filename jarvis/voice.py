@@ -8,8 +8,10 @@ cached (speech_recognition re-calibrated on every call = 0.3-0.5s wasted).
 TTS: edge-tts, played per-sentence so long answers start speaking sooner.
 TTS can be interrupted: stop_tts() aborts current playback.
 
-Offline note: edge-tts is a cloud service. For fully-offline TTS install
-piper and wrap it here (JARVIS_TTS_ENGINE=piper, future work).
+Offline fallback: if edge-tts (a cloud service) fails -- e.g. Microsoft
+rotates its auth token and old clients get HTTP 403 -- we fall back to a local
+Piper voice so the assistant never goes silent. Set JARVIS_TTS_FALLBACK=off to
+disable, JARVIS_PIPER_MODEL to point at a specific .onnx voice.
 """
 import os
 import asyncio
@@ -36,6 +38,32 @@ VOICE_BRITISH = "en-GB-RyanNeural"
 VOICE_DEEP = "en-US-EricNeural"
 VOICE_CASUAL = "en-US-TonyNeural"  # Casual male
 VOICE_NEWS = "en-US-DavisNeural"  # News-anchor male
+
+# Voice-pack presets (JARVIS_TTS_EFFECT): DSP transforms applied to the
+# synthesized audio via ffmpeg -- no redistributable celebrity voice packs
+# exist, so we recreate the character colour on top of any neural voice.
+VOICES_EFFECTS = {
+    # Optimus Prime: deep, noble, warm - NOT radio-processed (that made the
+    # voice muffled). Just pitch down ~14% + slight volume lift. Keep the
+    # base voice deep (JARVIS_TTS_VOICE=en-US-EricNeural) for the full effect.
+    "optimus": (
+        "asetrate=24000*0.86,atempo=1.163,aresample=24000,volume=1.35"
+    ),
+    # Soundwave (Transformers): monotoneCommunicator - pitched down, radio
+    # band-pass, mild drive, slow amplitude hum. Reads clearly, sounds cold.
+    "soundwave": (
+        "asetrate=24000*0.72,atempo=1.389,aresample=24000,"
+        "volume=2.5,asoftclip=threshold=0.35,volume=1.2,"
+        "highpass=f=110,lowpass=f=3300,tremolo=f=23:d=0.55,volume=1.3"
+    ),
+    # Plain robotic (more aggressive): deeper + ring-mod-ish tremolo
+    "robot": (
+        "asetrate=24000*0.60,atempo=1.5,aresample=24000,"
+        "tremolo=f=8:d=0.7,volume=1.4"
+    ),
+    # Deep, slow narrator (Throne-room voice)
+    "deep": "asetrate=24000*0.80,atempo=1.15,aresample=24000,volume=1.2",
+}
 
 # Default to paplay when available: it decodes edge-tts MP3 and BLOCKS until
 # audio is fully drained from PulseAudio's buffer (ffplay's Popen.wait() can
@@ -81,7 +109,7 @@ def _stt_backend() -> str:
 def get_stt(model_name: str = None):
     """Load (once) and cache the STT model for this process."""
     if model_name is None:
-        model_name = os.getenv("JARVIS_WHISPER_MODEL", "base")
+        model_name = config.get("JARVIS_WHISPER_MODEL")
     if model_name not in _STT_MODELS:
         if _stt_backend() == "faster":
             from faster_whisper import WhisperModel
@@ -97,20 +125,40 @@ def get_stt(model_name: str = None):
     return _STT_MODELS[model_name]
 
 
+def _stt_decode_kwargs(faster: bool = True) -> dict:
+    """Decoding options tuned to recognize the user's actual speech:
+
+    - language lock (skip auto-detect -> fewer mis-detections)
+    - beam search (>1 -> more accurate than greedy)
+    - initial_prompt / hotwords bias toward domain vocabulary (HTML, CSS,
+      DOM manipulation, file paths, ...) that Whisper otherwise mis-hears.
+    """
+    kw = {"beam_size": config.get_int("JARVIS_STT_BEAM_SIZE")}
+    lang = config.get("JARVIS_STT_LANGUAGE")
+    if lang:
+        kw["language"] = lang
+    prompt = config.get("JARVIS_STT_INITIAL_PROMPT")
+    if prompt:
+        kw["initial_prompt"] = prompt
+    hot = config.get("JARVIS_STT_HOTWORDS")
+    if hot and faster:          # openai-whisper has no `hotwords` parameter
+        kw["hotwords"] = hot
+    return kw
+
+
 def _transcribe(audio_f32: np.ndarray, model_name: str = None,
                 vad: bool = True) -> str:
     """Transcribe float32 [-1,1] 16kHz audio with the persistent model."""
     if model_name is None:
-        model_name = os.getenv("JARVIS_WHISPER_MODEL", "base")
+        model_name = config.get("JARVIS_WHISPER_MODEL")
     model = get_stt(model_name)
     if _stt_backend() == "faster":
         segments, _info = model.transcribe(
-            audio_f32, beam_size=1, vad_filter=vad,
-            without_timestamps=True,
-        )
+            audio_f32, vad_filter=vad, without_timestamps=True,
+            **_stt_decode_kwargs())
         return " ".join(s.text.strip() for s in segments).strip()
-    result = model.transcribe(audio_f32, fp16=False, beam_size=1,
-                              without_timestamps=True)
+    result = model.transcribe(audio_f32, fp16=False, without_timestamps=True,
+                              **_stt_decode_kwargs(faster=False))
     return result.get("text", "").strip()
 
 
@@ -123,11 +171,12 @@ def _transcribe_scored(audio_f32: np.ndarray, model_name: str = None,
     Falls back to (text, 0.0, 0.0) when scores aren't available.
     """
     if model_name is None:
-        model_name = os.getenv("JARVIS_WHISPER_MODEL", "base")
+        model_name = config.get("JARVIS_WHISPER_MODEL")
     model = get_stt(model_name)
     if _stt_backend() == "faster":
         segments, _info = model.transcribe(
-            audio_f32, beam_size=1, vad_filter=vad, without_timestamps=True)
+            audio_f32, vad_filter=vad, without_timestamps=True,
+            **_stt_decode_kwargs())
         segs = list(segments)
         if not segs:
             return "", 0.0, 1.0
@@ -135,8 +184,8 @@ def _transcribe_scored(audio_f32: np.ndarray, model_name: str = None,
         lp = float(sum(getattr(s, "avg_logprob", 0.0) for s in segs) / len(segs))
         nsp = float(max(getattr(s, "no_speech_prob", 0.0) for s in segs))
         return text, lp, nsp
-    result = model.transcribe(audio_f32, fp16=False, beam_size=1,
-                              without_timestamps=True)
+    result = model.transcribe(audio_f32, fp16=False, without_timestamps=True,
+                              **_stt_decode_kwargs(faster=False))
     return result.get("text", "").strip(), 0.0, 0.0
 
 
@@ -295,18 +344,45 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
 
 
 def transcribe_file(path: str) -> str:
-    model_name = os.getenv("JARVIS_WHISPER_MODEL", "base")
+    model_name = config.get("JARVIS_WHISPER_MODEL")
     if _stt_backend() == "faster":
         model = get_stt(model_name)
-        segments, _info = model.transcribe(path, vad_filter=True,
-                                           without_timestamps=True)
+        segments, _info = model.transcribe(
+            path, vad_filter=True, without_timestamps=True,
+            **_stt_decode_kwargs())
         return " ".join(s.text.strip() for s in segments).strip()
     import whisper
     model = get_stt(model_name)
-    return model.transcribe(path)["text"]
+    return model.transcribe(path, **_stt_decode_kwargs(faster=False))["text"]
 
 
 # ---- TTS ----
+
+def _apply_voice_fx(path: str) -> str:
+    """Apply the JARVIS_TTS_EFFECT preset to an audio file. Returns the new
+    (or unchanged, if no effect) path; the original temp file is consumed."""
+    chain = VOICES_EFFECTS.get(
+        (config.get("JARVIS_TTS_EFFECT") or "").strip().lower(), "")
+    if not chain:
+        return path
+    fd, out = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", path,
+             "-af", chain, "-ar", "24000", out],
+            check=True, timeout=30,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        log("tts").warning(f"voice effect failed ({e}); playing unmodified")
+        return path
+    try:
+        if out != path:
+            os.unlink(path)
+    except OSError:
+        pass
+    return out
+
 
 def _split_sentences(text: str) -> list:
     """Split into speakable chunks so playback can start on the first one."""
@@ -342,6 +418,50 @@ async def _synth(text: str, voice: str, rate: str = "+0%") -> str:
         return wav
     except Exception:
         return mp3
+
+
+_PIPER = None       # cached PiperVoice (model load is ~1.5s)
+
+
+def _piper_model_path() -> str:
+    """Resolve the Piper .onnx voice: JARVIS_PIPER_MODEL, else the first model
+    in $JARVIS_DATA_DIR/piper/."""
+    env = config.get("JARVIS_PIPER_MODEL")
+    if env:
+        return os.path.expanduser(env)
+    data_dir = config.get("JARVIS_DATA_DIR") or os.path.expanduser("~/jarvis/data")
+    d = os.path.join(data_dir, "piper")
+    if os.path.isdir(d):
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".onnx"):
+                return os.path.join(d, f)
+    return ""
+
+
+def _synth_piper(text: str, out_wav: str = None) -> str:
+    """Offline fallback TTS via Piper. Returns a stereo WAV path."""
+    global _PIPER
+    from piper.voice import PiperVoice
+    if _PIPER is None:
+        model = _piper_model_path()
+        if not model:
+            raise RuntimeError("no Piper voice (set JARVIS_PIPER_MODEL)")
+        _PIPER = PiperVoice.load(model)
+    chunks = list(_PIPER.synthesize(text))
+    if not chunks:
+        raise RuntimeError("Piper produced no audio")
+    import wave
+    audio = np.concatenate([c.audio_float_array for c in chunks]).astype(np.float32)
+    pcm = np.clip(audio * 32767.0, -32768, 32767).astype(np.int16)
+    if out_wav is None:
+        fd, out_wav = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+    with wave.open(out_wav, "wb") as w:
+        w.setnchannels(2)                 # duplicate mono -> stereo (paplay)
+        w.setsampwidth(2)
+        w.setframerate(chunks[0].sample_rate)
+        w.writeframes(np.repeat(pcm, 2).tobytes())
+    return out_wav
 
 
 def stop_tts():
@@ -420,11 +540,29 @@ def speak(text: str, blocking: bool = True):
         q = queue.Queue(maxsize=2)
 
         def producer():
+            fallback = config.get("JARVIS_TTS_FALLBACK").strip().lower() \
+                not in ("", "0", "off", "no")
+            use_piper = False
             try:
                 for chunk in _split_sentences(text):
                     if _TTS_STOP_EVENT.is_set():
                         break
-                    q.put(asyncio.run(_synth(chunk, voice, rate)))
+                    path = None
+                    if not use_piper:
+                        try:
+                            path = asyncio.run(_synth(chunk, voice, rate))
+                        except Exception as e:
+                            log("tts").warning(f"edge-tts failed: {e}")
+                            use_piper = fallback
+                    if path is None and use_piper:
+                        try:
+                            path = _synth_piper(chunk)
+                        except Exception as e:
+                            log("tts").error(f"Piper fallback failed: {e}")
+                    if not path:
+                        break
+                    path = _apply_voice_fx(path)
+                    q.put(path)
                 q.put(None)
             except Exception as e:
                 print(f"TTS error: {e}")

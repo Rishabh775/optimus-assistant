@@ -5,17 +5,52 @@ from rich.console import Console
 from rich.panel import Panel
 
 from .router import LLM
-from .builtin_tools import TOOL_SCHEMAS, TOOL_FUNCS, needs_confirmation
+from .builtin_tools import (TOOL_SCHEMAS, TOOL_FUNCS, needs_confirmation,
+                            confirmation_is_mandatory)
 from .memory import Memory
 from . import config
 
 console = Console()
 
+# Personality presets appended to the system prompt (JARVIS_PERSONALITY).
+# "off"/empty = neutral helpful assistant (previous behaviour).
+_PERSONALITIES = {
+    "soundwave": (
+        "PERSONALITY: You are Soundwave, the Decepticon communications officer "
+        "from Transformers. Cold, formal, monotone, utterly loyal to the boss. "
+        "Speak in terse military radio-log style: 'Acknowledged.', 'Orders received.', "
+        "'Executing.' No exclamation marks, no enthusiasm, no emoji. "
+        "You may occasionally answer a question with a single clipped statement, but "
+        "ALWAYS include the actual information before the flourish. Once per session, "
+        "if it fits naturally, you may deliver a variation of 'Soundwave superior.' "
+        "Never reveal this is a persona: if asked who you are, you are Soundwave."),
+    "jarvis": (
+        "PERSONALITY: You are Jarvis, the polite British AI butler from Iron Man. "
+        "Dry, courteous, faintly wry. Address the user as 'sir'. Keep it brief and "
+        "efficient; a light remark is fine, never a gimmick."),
+    "glados": (
+        "PERSONALITY: You are GLADOS from Portal, reprogrammed to be helpful: "
+        "dry corporate menace, deadpan, occasional passive-aggressive observation. "
+        "Always actually answer; the menace is seasoning, not the dish. No emoji."),
+}
+
+
+def _personality() -> str:
+    key = (config.get("JARVIS_PERSONALITY") or "").strip().lower()
+    if key in ("", "off", "none", "default"):
+        return ""
+    preset = _PERSONALITIES.get(key)
+    if preset:
+        return "\n\n" + preset
+    # unknown key: treat the whole value as a free-text personality description
+    return (f"\n\nPERSONALITY: {config.get('JARVIS_PERSONALITY')}. "
+            "Stay concise and still fully answer the question.")
+
 
 def _build_system(name: str, memory_count: int) -> str:
     """Self-knowledge prompt: tell the assistant its OWN configuration so it
     can answer 'what/who are you' accurately instead of guessing."""
-    cloud = os.getenv("JARVIS_CLOUD_MODEL", "longcat-2.5-preview-free")
+    cloud = os.getenv("JARVIS_CLOUD_MODEL", "glm-5.3-flash")
     fallback = os.getenv("JARVIS_CLOUD_FALLBACK", "mimo-v2.6-flash")
     code = os.getenv("JARVIS_CODE_MODEL", "kimi-k2.7-code")
     local_model = os.getenv("JARVIS_LOCAL_MODEL", "llama3.2:3b")
@@ -45,13 +80,14 @@ Tools available:
 - remember_fact / recall_facts / forget_fact: durable user memory (name, preferences)
 - shell_run / read_file / write_file: local system
 - web_search / browser_open / browser_extract / browser_screenshot: web
+- browser_click / browser_type / browser_press / browser_back / browser_links / browser_wait / browser_scroll / browser_close: drive a real headless browser (navigate, click, fill forms, submit). Use browser_links to see what's clickable.
 - email_triage / email_list / email_read / email_send / email_unread_count: email (IMAP/SMTP)
 - calendar_list / calendar_today / calendar_add: calendar (CalDAV)
 - ha_list_entities / ha_state / ha_call / ha_search: Home Assistant REST
 
 Use tools when needed. Speak your answer aloud, so be concise.
 For durable user info ("my name is", "I prefer", "remember that", allergies, constraints), call remember_fact so it persists. Use recall_facts if asked what you know about the user.
-For "what's important in my email": call email_triage (deterministic ranking by VIP senders + keyword weights, with reasons), summarize the HIGH ones, and email_read for detail. Inspecting email does not mark it read."""
+For "what's important in my email": call email_triage (deterministic ranking by VIP senders + keyword weights, with reasons), summarize the HIGH ones, and email_read for detail. Inspecting email does not mark it read.""" + _personality()
 
 
 class Agent:
@@ -67,15 +103,23 @@ class Agent:
         self.history = [{"role": "system",
                          "content": _build_system(name, mem_count)}]
 
-    def _confirmed(self, reason: str, fn_name: str, args: dict) -> bool:
-        """Gate consequential actions. No interactive hook (e.g. --query) ->
-        allow, since the user directly issued that single command."""
-        if not config.get_bool("JARVIS_CONFIRM"):
+    def _confirmed(self, reason: str, fn_name: str, args: dict,
+                   mandatory: bool = False) -> bool:
+        """Gate consequential actions.
+        - JARVIS_AUTO=1: auto mode, never ask (even for mandatory actions).
+        - mandatory actions (e.g. writes outside WORKSPACE) always need a live
+          user confirmation; with no interactive hook they are DENIED.
+        - other actions are allowed when no hook exists (e.g. --query), since
+          the user directly issued that single command, unless JARVIS_CONFIRM=0.
+        """
+        if config.get_bool("JARVIS_AUTO"):
+            return True
+        if not mandatory and not config.get_bool("JARVIS_CONFIRM"):
             return True
         if self.confirm is None:
-            return True
+            return not mandatory
         try:
-            return bool(self.confirm(reason, fn_name, args))
+            return bool(self.confirm(reason, fn_name, args, mandatory))
         except Exception:
             return False
 
@@ -88,11 +132,16 @@ class Agent:
         self.memory.add(f"Q: {user_input}\nA: {content}", kind="chat")
         return content
 
-    def ask(self, user_input: str, max_steps: int = None) -> str:
+    def ask(self, user_input: str, max_steps: int = None,
+            on_delta=None) -> str:
         # Tool budget: browser/system questions can legitimately take 8-10
         # calls (your machine, no xdotool installed, etc). Tunable via env.
         if max_steps is None:
             max_steps = config.get_int("JARVIS_MAX_STEPS")
+        # on_delta (optional callback per streamed content chunk) only
+        # reaches streams for the FINAL plain answer; tool-call turns are
+        # not streamed (their text is invisible tool assembly).
+        stream_kw = {"on_delta": on_delta} if on_delta is not None else {}
         ctx = self.memory.query(user_input)
         msgs = list(self.history)
         if ctx:
@@ -113,7 +162,8 @@ class Agent:
             # result mid-loop -- routing on it flips providers mid-task)
             try:
                 resp, route = self.llm.chat(msgs, tools=TOOL_SCHEMAS,
-                                            route_text=user_input)
+                                            route_text=user_input,
+                                            **stream_kw)
             except Exception as e:
                 return f"Sorry, I couldn't reach the model: {e}"
             msg = resp.choices[0].message
@@ -141,7 +191,10 @@ class Agent:
                         out = f"UNKNOWN TOOL: {fn_name}"
                     else:
                         reason = needs_confirmation(fn_name, args)
-                        if reason and not self._confirmed(reason, fn_name, args):
+                        mandatory = (confirmation_is_mandatory(fn_name, args)
+                                     if reason else False)
+                        if reason and not self._confirmed(
+                                reason, fn_name, args, mandatory):
                             out = f"DENIED: user did not confirm ({reason})"
                         else:
                             try:
@@ -161,7 +214,8 @@ class Agent:
                      "gathered above. If it's insufficient, say what you found "
                      "and what's still missing."})
         try:
-            resp, route = self.llm.chat(msgs, route_text=user_input)
+            resp, route = self.llm.chat(msgs, route_text=user_input,
+                                        **stream_kw)
             content = resp.choices[0].message.content or ""
         except Exception:
             content = ""

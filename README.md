@@ -4,7 +4,7 @@ Local-first personal AI assistant. Hybrid routing between **Ollama** (local) and
 
 ```
 mic -> [wake-word] -> faster-whisper STT -> Agent -> [Router] -> Ollama (simple, opt-in)
-                                                         \-> longcat-2.5-preview-free (default cloud, free)
+                                                         \-> glm-5.3-flash (default cloud)
                                                          \-> mimo-v2.6-flash (cloud fallback)
                                                          \-> Kimi K2.7 Code (code)
                        -> 23 tools (self-status/memory/triage/shell/file/web/browser/email/calendar/HA)
@@ -46,6 +46,7 @@ python -m jarvis --query "..."    # one-shot
 | `remember_fact`, `recall_facts`, `forget_fact` | durable user memory (name, preferences) persisted to `data/facts.jsonl` |
 | `shell_run`, `read_file`, `write_file` | local system |
 | `web_search`, `browser_open`, `browser_extract`, `browser_screenshot` | web |
+| `browser_click`, `browser_type`, `browser_press`, `browser_back`, `browser_links`, `browser_wait`, `browser_scroll`, `browser_close` | drive a real headless browser (click/type/submit); `browser_type` + Enter are confirmation-gated |
 | `email_triage` | rank emails by importance (VIP senders + keywords) |
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
@@ -57,9 +58,9 @@ Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs 
 
 | Trigger | Provider | Model |
 |---|---|---|
-| action verbs (list/read/run/...) | cloud | `longcat-2.5-preview-free` |
+| action verbs (list/read/run/...) | cloud | `glm-5.3-flash` |
 | code/refactor/bug | cloud | `kimi-k2.7-code` |
-| plan/analyze/long | cloud | `longcat-2.5-preview-free` |
+| plan/analyze/long | cloud | `glm-5.3-flash` |
 | simple chat | local ollama (opt-in: `JARVIS_LOCAL_OK=1`) | `llama3.2:3b` |
 
 7B local models are ~5 tok/s on a 4-core CPU — 3B is the usable local tier.
@@ -115,10 +116,16 @@ into `wake_models/`, run `python install_wake_models.py`, then set
 | `JARVIS_STT_MIN_LOGPROB` | `-1.0` | confidence gate: drop transcript if no_speech_prob is also high |
 | `JARVIS_CLOUD_COOLDOWN` | `90`s | after a cloud failure, use the fallback for this long (circuit breaker) |
 | `JARVIS_STT_ENERGY_MULT` | `1.0` | peak-based mic gate (matches wake scale); floor 400 — soft speech stays "voiced" |
-| `JARVIS_STT_GATE_MAX` | `6000` | gate ceiling; ambient is a median (transient-proof) so a loud moment can't make it deaf |
+| `JARVIS_STT_GATE_MAX` | `15000` | gate ceiling; must sit above real ambient or the mic false-triggers (raise for noisy rooms) |
 | `JARVIS_STT_STOP_RATIO` | `0.35` | hysteresis: capture ends only when audio drops below this fraction of your speech level — raise if it cuts you off mid-sentence |
 | `JARVIS_STT_MIN_SPEECH` | `0.5`s | ignore end-of-speech until at least this much speech is captured |
 | `JARVIS_STT_TAIL` | `0.35`s | silence after TTS stops before sampling/calibrating (speaker tail margin) |
+| `JARVIS_WHISPER_MODEL` | `small.en` | STT model (`.`=`.en` English-only is more accurate at the same size). `base`/`tiny.en` are faster, less accurate |
+| `JARVIS_COMMAND_MODEL` | `small.en` | model used to transcribe the command after the wake word (falls back to `JARVIS_WHISPER_MODEL`) |
+| `JARVIS_STT_LANGUAGE` | `en` | language lock (skip auto-detect); empty = auto |
+| `JARVIS_STT_BEAM_SIZE` | `5` | beam search width; `1` = greedy (faster), higher = more accurate |
+| `JARVIS_STT_INITIAL_PROMPT` | _domain hint_ | biases recognition toward words you say (names, tech terms) |
+| `JARVIS_STT_HOTWORDS` | _domain terms_ | extra hotword boost (faster-whisper only) |
 | `JARVIS_STT_COMPUTE` | `int8` | faster-whisper compute type |
 | `JARVIS_STT_THREADS` | `4` | faster-whisper CPU threads |
 | `JARVIS_FOLLOWUP` | `1` | continued conversation window after each answer |
@@ -128,11 +135,21 @@ into `wake_models/`, run `python install_wake_models.py`, then set
 | `JARVIS_GREETINGS` | `Yes, boss?|Go ahead.|Boss?|Listening.|I'm here.|Shoot.` | `|`-separated custom pool |
 | `JARVIS_TTS_VOICE` | `en-US-AndrewMultilingualNeural` | best free neural male |
 | `JARVIS_TTS_RATE` | `+0%` | e.g. `+10%` for snappier playback |
+| `JARVIS_TTS_EFFECT` | `off` | voice-pack preset: `soundwave` (deep monotone radio voice, Transformers), `robot`, `deep` |
+| `JARVIS_PERSONALITY` | `off` | persona: `soundwave`, `jarvis`, `glados`, or free text (shapes the system prompt + greeting pool) |
+| `JARVIS_TTS_FALLBACK` | `piper` | offline TTS used when edge-tts fails (`off` to disable) |
+| `JARVIS_PIPER_MODEL` | _(auto)_ | Piper `.onnx` voice; empty = first model in `$JARVIS_DATA_DIR/piper/` |
 | `JARVIS_HOTKEY` | `ctrl+alt+j` | supports `ctrl`, `alt`, `shift`, `cmd/super/win`, + single letter |
 
 `voice.listen` also retries once without VAD if the energy gate saw speech but the Silero VAD stripped the audio — protects against quiet utterances being lost. Transcripts that look like silence/noise (high `no_speech_prob` AND low `avg_logprob`) are dropped instead of sent to the LLM.
 
-**Fully-offline note:** STT is local (faster-whisper) and memory is local, but TTS uses edge-tts (Microsoft, cloud) by default. To go fully offline, install `piper-tts` + `espeak-ng` and a Piper voice, and point `JARVIS_TTS_PLAYER`/engine at it — not enabled by default because `espeak-ng` is a system dependency.
+**Offline TTS fallback:** edge-tts is a free Microsoft cloud service; it occasionally breaks (e.g. `HTTP 403` after Microsoft rotates its auth token — fixed with `pip install -U edge-tts`). When it fails, `speak()` automatically switches to a local **Piper** voice so the assistant keeps talking. Install a voice with:
+```bash
+pip install piper-tts
+mkdir -p ~/jarvis/data/piper
+wget -P ~/jarvis/data/piper https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx{,.json}
+```
+With `JARVIS_TTS_FALLBACK=piper` (default), STT, memory and TTS can now all run fully offline.
 
 ## Configure integrations
 
@@ -195,8 +212,10 @@ LICENSE                      # MIT
 - `.env` is chmod 600 and gitignored
 - `shell_run` executes in `~/jarvis/workspace/` with a **scrubbed environment** (keys/tokens/passwords removed from child processes) and a destructive-command blocklist (rm -r outside workspace, mkfs, dd to /dev, fork bombs, `curl|sh`, shutdown/reboot, etc.)
 - `read_file` limited to `$HOME` + `/tmp`; secret files (`.env`, keys, tokens, credentials) blocked
-- `write_file` limited to `workspace/` by default (`JARVIS_ALLOW_ANY_PATH=1` lifts to `$HOME`)
-- **Confirmation gate** (`JARVIS_CONFIRM=1`): the agent asks before consequential actions — risky shell commands (rm/mv/sudo/redirects/installs), sending email, overwriting files. In voice mode it asks aloud and waits for "yes"; in text mode it prompts. This is the main defense against the email/web → shell prompt-injection chain.
+- `write_file` limited to `workspace/` by default; writes anywhere under `$HOME` are allowed as **mandatory-confirmation** actions (`JARVIS_ALLOW_HOME_WRITES=1`, default). Outside the workspace the agent asks first and **refuses when no interactive prompt is available** (e.g. `--query`), so a prompt injection can't silently write to your files. `JARVIS_ALLOW_ANY_PATH=1` lifts the read restrictions too.
+- **Confirmation gate** (`JARVIS_CONFIRM=1`): the agent asks before consequential actions — risky shell commands (rm/mv/sudo/redirects/installs), sending email, overwriting files. In voice mode it asks aloud and waits for "yes"; in text mode it prompts. Writes outside `workspace/` are always gated, even if `JARVIS_CONFIRM=0`. This is the main defense against the email/web → shell prompt-injection chain.
+- **Auto mode** (`JARVIS_AUTO=1`): never asks for anything — all confirmations (including mandatory home-folder writes) are auto-approved. The hard safety layer still applies: destructive-command blocklist and secret-file read bans are untouched. Since it removes the main prompt-injection defense, use it only on a trusted setup (or temporarily, e.g. `JARVIS_AUTO=1 python -m jarvis --mode voice`).
+- **Live mode switch (text mode)**: like Claude Code, press **Shift+Tab** at the prompt or type `/auto` (`/auto on` / `/auto off`) to toggle confirmations without restarting. The prompt label shows the current mode: `[auto]` = never asks, `[ask]` = confirmations on. The switch is per-process; your `.env` is never rewritten.
 - The blocklist is **not** a sandbox: content read via email/browser flows into the model's context, so a crafted email/web page can still try to steer `shell_run`. For defense in depth, run as a dedicated user or wrap shell in `firejail`/`bubblewrap`.
 
 ## Tested examples
@@ -227,3 +246,34 @@ JARVIS_LOG_FORMAT="%(asctime)s %(levelname)s %(name)s: %(message)s"
 ## License
 
 MIT - see [LICENSE](LICENSE).
+## Phone app (PWA over Tailscale)
+
+Reach Soundwave from your phone using the same agent (tools, confirmations,
+memory) as at home:
+
+```bash
+python -m jarvis.server
+```
+
+First run generates `JARVIS_APP_TOKEN` in `.env` and prints it. On the phone
+open `https://<machine>.tailnet.ts.net` (or `http://<pc-ip>:8080` on LAN),
+enter the token, and chat. Everything except `GET /api/health` requires the
+token; agent confirmations show up in-chat as Confirm/Deny cards.
+
+Chats are ChatGPT-style: named sessions in a left rail, persisted to
+SQLite (`data/phone-app/chats.db`, tunable via `JARVIS_APP_DB` so you can
+remove it from backups), answers stream in token-by-token over the
+WebSocket (markdown rendered client-side). Tool-call turns are silent
+until the final answer streams.
+
+For access from anywhere, run both endpoints through
+[Tailscale](https://tailscale.com) (free for personal use):
+
+```bash
+sudo tailscale up            # once; install the Tailscale app on the phone too
+tailscale serve --bg https / http://127.0.0.1:8080
+```
+
+Then open `https://<machine-name>.<tailnet>.ts.net` on the phone. HTTPS lets
+Android offer "Install app" (home-screen PWA). The LAN port stays bound to
+the token check, so guests on your WiFi see only the login screen.

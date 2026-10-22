@@ -77,8 +77,8 @@ def test_calibration_ignores_loud_transient(monkeypatch):
 def test_calibration_clamped_in_loud_room(monkeypatch):
     voice._ENERGY_GATE = None
     monkeypatch.setitem(__import__("sys").modules, "sounddevice",
-                        _cal_with([12000, 13000, 12500, 12900, 12100]))
-    assert voice._calibrate_energy() == 6000.0
+                        _cal_with([18000, 19000, 18500, 18900, 18100]))
+    assert voice._calibrate_energy() == 15000.0
 
 
 # ---- TTS pipeline ----
@@ -112,6 +112,57 @@ def test_speak_interrupted_retires_threads(fake_audio_out):
     time.sleep(0.2)
     assert fake_audio_out.overlaps == 0
     assert threading.active_count() <= base + 1
+
+
+# ---- offline (Piper) TTS fallback ----
+def test_synth_piper_writes_stereo_wav(monkeypatch, tmp_path):
+    import wave
+    import types as T
+    chunk = T.SimpleNamespace(sample_rate=22050,
+                              audio_float_array=np.zeros(1000, dtype=np.float32))
+    class FakeVoice:
+        def synthesize(self, text): return [chunk]
+    class FakePV:
+        @staticmethod
+        def load(path): return FakeVoice()
+    sub = T.ModuleType("piper.voice"); sub.PiperVoice = FakePV
+    monkeypatch.setitem(__import__("sys").modules, "piper", T.ModuleType("piper"))
+    monkeypatch.setitem(__import__("sys").modules, "piper.voice", sub)
+    monkeypatch.setattr(voice, "_piper_model_path", lambda: "/fake/model.onnx")
+    voice._PIPER = None
+    out = voice._synth_piper("hello")
+    try:
+        with wave.open(out) as w:
+            assert w.getnchannels() == 2
+            assert w.getframerate() == 22050
+            assert w.getnframes() == 1000          # mono duplicated
+    finally:
+        os.unlink(out)
+        voice._PIPER = None
+
+
+def test_speak_falls_back_to_piper_on_edge_tts_error(fake_audio_out, monkeypatch, tmp_path):
+    made = []
+    def fake_piper(text, out_wav=None):
+        p = tmp_path / f"piper_{len(made)}.wav"; p.write_bytes(b"x")
+        made.append(text); return str(p)
+    monkeypatch.setattr(voice, "_synth_piper", fake_piper)
+    monkeypatch.setattr(voice, "_synth",
+                        lambda *a, **k: (_ for _ in ()).throw(Exception("403")))
+    voice.speak("Fallback alpha. Fallback beta.", blocking=True)
+    assert made                          # Piper was used
+    assert fake_audio_out.order          # and its audio was played
+
+
+def test_speak_no_fallback_when_disabled(fake_audio_out, monkeypatch, tmp_path):
+    called = []
+    monkeypatch.setenv("JARVIS_TTS_FALLBACK", "off")
+    monkeypatch.setattr(voice, "_synth_piper",
+                        lambda *a, **k: called.append(1) or "x")
+    monkeypatch.setattr(voice, "_synth",
+                        lambda *a, **k: (_ for _ in ()).throw(Exception("403")))
+    voice.speak("Fallback alpha. Fallback beta.", blocking=True)
+    assert called == []
 
 
 def _capture_dur(fake_mic, monkeypatch):
