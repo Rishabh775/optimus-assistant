@@ -364,6 +364,39 @@ def calendar_today() -> str:
     return calendar_today()
 
 
+# ---- proactive loop: reminders (durable, notify-only; scheduler.py) ----
+
+def remind_me(message: str, at: str, repeat: str = "") -> str:
+    """Schedule a reminder; the user is notified when it fires."""
+    from . import scheduler
+    try:
+        r = scheduler.add(message, at, repeat)
+    except ValueError as e:
+        return f"error: {e}"
+    return (f"Reminder #{r['id']} set: {r['message']!r} at "
+            f"{scheduler._fmt_when(r['due_at'])}"
+            f"{' (repeats ' + r['repeat'] + ')' if r['repeat'] else ''}")
+
+
+def list_reminders() -> str:
+    """List all pending reminders."""
+    from . import scheduler
+    rows = scheduler.list_pending()
+    if not rows:
+        return "no pending reminders"
+    return "\n".join(
+        f"#{r['id']}  {scheduler._fmt_when(r['due_at'])}"
+        f"{' (daily)' if r['repeat'] == 'daily' else (' (weekly)' if r['repeat'] else '')}"
+        f"  {r['message']}" for r in rows)
+
+
+def cancel_reminder(id: str) -> str:
+    """Cancel a pending reminder by id."""
+    from . import scheduler
+    return ("cancelled" if scheduler.cancel(id)
+            else f"error: no pending reminder #{id}")
+
+
 def ha_list_entities(domain: str = "") -> str:
     from .tools.homeassistant import ha_list_entities
     return ha_list_entities(domain or None)
@@ -633,6 +666,40 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "remind_me",
+        "description": ("Schedule a REMINDER (not a calendar event) that "
+                        "notifies the user at a moment. `at` is a FUTURE "
+                        "time: ISO datetime ('2026-10-24T15:30', the date is "
+                        "required unless it is today), bare 'HH:MM' (today, "
+                        "or tomorrow if already past), or relative ('in 20 "
+                        "minutes', 'in 1h30m'). repeat: '' | 'daily' | "
+                        "'weekly'. When they ask 'remind me' / 'wake me' / "
+                        "'nudge me', use this, NOT calendar_add."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "at": {"type": "string"},
+                "repeat": {"type": "string"},
+            },
+            "required": ["message", "at"],
+        },
+    },
+    {
+        "name": "list_reminders",
+        "description": "List pending reminders with ids and fire times.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "cancel_reminder",
+        "description": "Cancel a pending reminder by id (from list_reminders).",
+        "parameters": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
+    {
         "name": "ha_list_entities",
         "description": "List Home Assistant entities, optionally filtered by domain (light, switch, sensor...).",
         "parameters": {
@@ -702,6 +769,9 @@ TOOL_FUNCS = {
     "calendar_list": calendar_list,
     "calendar_add": calendar_add,
     "calendar_today": calendar_today,
+    "remind_me": remind_me,
+    "list_reminders": list_reminders,
+    "cancel_reminder": cancel_reminder,
     "ha_list_entities": ha_list_entities,
     "ha_state": ha_state,
     "ha_call": ha_call,

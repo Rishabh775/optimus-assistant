@@ -438,6 +438,10 @@ def main():
         print(agent.ask(args.query))
         return
 
+    # proactive loop: durable reminders (all long-running modes)
+    from . import scheduler
+    scheduler.start()
+
     if args.mode == "text":
         text_loop(agent)
     elif args.mode == "voice":

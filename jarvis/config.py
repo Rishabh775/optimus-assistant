@@ -79,6 +79,14 @@ DEFAULTS = {
     # persona of the assistant: soundwave | jarvis | glados | off
     # (or free text: any other value is used verbatim as a personality hint)
     "JARVIS_PERSONALITY": "off",
+    # proactive loop (scheduler.py): durable reminders
+    # SQLite store (relative to repo root). Startup catch-up fires anything
+    # past-due as "(missed)".
+    "JARVIS_REMINDER_DB": "data/phone-app/reminders.db",
+    # seconds between scheduler sweeps (min 2)
+    "JARVIS_SCHED_TICK": "20",
+    # IANA timezone for reminder/briefing times; empty = system local
+    "JARVIS_TZ": "",
 }
 
 

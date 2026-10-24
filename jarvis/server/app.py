@@ -47,6 +47,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import config
+from .. import scheduler
 from ..agent import Agent
 from . import store
 
@@ -89,6 +90,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Soundwave", docs_url=None, redoc_url=None)
     token = ensure_token()
     store.init()
+    scheduler.start()      # reminders (same SQLite rows as the CLI modes)
 
     def _token_ok(candidate: str | None) -> bool:
         return bool(candidate) and secrets.compare_digest(candidate, token)

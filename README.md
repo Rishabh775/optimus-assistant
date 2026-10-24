@@ -38,7 +38,7 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (23)
+## Tools (34)
 
 | Tool | What |
 |---|---|
@@ -50,9 +50,18 @@ python -m jarvis --query "..."    # one-shot
 | `email_triage` | rank emails by importance (VIP senders + keywords) |
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
+| `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
+
+## Proactive loop (reminders)
+
+A background scheduler thread runs in **every** long-running mode (text, voice, wake, hotkey) and in the phone-app server, so a reminder set in one place fires everywhere the assistant can reach you. Reminders are notify-only: firing delivers text (console log today; ntfy push + speaker + WS notes are phasing in) — the scheduler never runs the agent by itself.
+
+- Survive reboots via SQLite (`JARVIS_REMINDER_DB`); anything past-due on startup fires as `(missed)`
+- `JARVIS_TZ` overrides the system timezone for reminder times ("Asia/Kolkata")
+- Two processes racing is safe: each fire is claimed with a conditional SQLite UPDATE, so a reminder is delivered exactly once
 
 ## Routing
 
@@ -186,6 +195,7 @@ jarvis/                      # python package
 ├── memory.py        # Chroma persistent memory (similarity-gated, pruned)
 ├── facts.py         # durable user facts (facts.jsonl)
 ├── config.py        # central settings + validation
+├── scheduler.py     # proactive loop: durable reminders + fire loop
 ├── audio.py         # shared gain/energy/warning helpers
 ├── log.py           # leveled logging (JARVIS_LOG_LEVEL)
 ├── sounds.py        # ack/end chirps (generated, no assets)
