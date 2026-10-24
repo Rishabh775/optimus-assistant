@@ -130,6 +130,33 @@
        background:var(--panel2);color:var(--text);font-size:16px;outline:none}
   #msg:focus{border-color:var(--accent)}
   form button{border-radius:12px}
+  /* reminders sheet (proactive loop) */
+  #sheet{position:fixed;inset:0;display:none;align-items:flex-end;
+         justify-content:center;z-index:60;background:rgba(0,0,0,.55)}
+  #sheet .panel{background:var(--panel);width:100%;max-width:540px;
+                border-radius:16px 16px 0 0;border:1px solid var(--line);
+                padding:14px;max-height:82dvh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
+  .phead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .phead h2{margin:0;font-size:16px}
+  .phead button{background:transparent;color:var(--dim);font-size:18px;padding:2px 8px}
+  .rrow{display:flex;gap:10px;align-items:baseline;padding:10px 6px;
+        border-bottom:1px solid var(--line)}
+  .rrow:last-child{border-bottom:0}
+  .rrow .rt{font-size:12px;color:var(--accent);font-variant-numeric:tabular-nums;flex:none}
+  .rrow .rm{flex:1;font-size:14px;min-width:0;word-break:break-word}
+  .rrow .rr{color:var(--dim);font-size:11px}
+  .rrow .rc{background:transparent;color:var(--dim);padding:2px 9px;border:0;font-size:15px}
+  .rrow .rc:active{color:#ff6b6b}
+  .rform{display:flex;gap:8px;margin-top:12px}
+  .rform input,.rform select{flex:1;min-width:0;padding:10px;border-radius:10px;
+        border:1px solid var(--line);background:var(--panel2);color:var(--text);outline:none}
+  .rform input:focus,.rform select:focus{border-color:var(--accent)}
+  .rform input.wide{flex:2 1 100%}
+  .rform button{border-radius:10px}
+  .rhint{color:var(--dim);font-size:11px;margin-top:8px}
+  #rail .head{gap:6px}
+  .mini{background:transparent;color:var(--text);font-size:17px;padding:8px 9px}
+  .mini:active{background:var(--panel2)}
   #shade{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;z-index:40}
   @media (max-width:820px){
     #burger{display:inline-block}
@@ -150,7 +177,14 @@
 
 <main id="app">
   <aside id="rail">
-    <div class="head"><h1>Soundwave <small>(v10)</small></h1><button id="newChat">+ New</button></div>
+    <div class="head">
+      <h1>Soundwave <small>(v10)</small></h1>
+      <div style="display:flex;gap:2px">
+        <button class="mini" id="briefBtn" title="Briefing">☀️</button>
+        <button class="mini" id="remBtn" title="Reminders">⏰</button>
+        <button id="newChat">+ New</button>
+      </div>
+    </div>
     <div id="slist"></div>
   </aside>
   <div id="shade"></div>
@@ -168,6 +202,25 @@
     </form>
   </section>
 </main>
+
+<!-- reminders sheet (proactive loop) -->
+<div id="sheet">
+  <div class="panel">
+    <div class="phead"><h2>Reminders</h2><button id="rclose" type="button">✕</button></div>
+    <div id="rlist"></div>
+    <div class="rform">
+      <input id="rmsg" class="wide" placeholder="message (e.g. stand up and stretch)">
+      <input id="rat" placeholder="in 20 minutes">
+      <select id="rrep">
+        <option value=""></option>
+        <option value="daily">daily</option>
+        <option value="weekly">weekly</option>
+      </select>
+      <button id="radd" type="button">Add</button>
+    </div>
+    <div class="rhint">When: "in 20 minutes", "15:30", or ISO "2026-10-25T07:30" · repeats daily/weekly</div>
+  </div>
+</div>
 
 <script src="/static/vendor/marked.min.js"></script>
 <script src="/static/vendor/purify.min.js"></script>
@@ -267,6 +320,8 @@
 
   // ---- empty state / suggested prompts ----
   var SUGGESTIONS = [
+    { icon: '🌤', label: 'Morning briefing', q: 'Give me my daily briefing' },
+    { icon: '⏰', label: 'Remind me to stretch', q: 'Remind me to stand up and stretch in 45 minutes' },
     { icon: '💻', label: "How's my system?", q: "How is my system doing right now?" },
     { icon: '📁', label: 'List workspace files', q: 'List the files in my workspace' },
     { icon: '📅', label: "What's on my calendar?", q: "What's on my calendar today?" },
@@ -377,6 +432,93 @@
       closeRail();
       showEmpty();
     });
+  };
+
+  // ---- reminders sheet + one-tap briefing (proactive loop) ----
+  var sheet = $('#sheet');
+  function openSheet() { sheet.style.display = 'flex'; loadReminders(); }
+  function closeSheet() { sheet.style.display = 'none'; }
+  $('#remBtn').onclick = function () { closeRail(); openSheet(); };
+  $('#rclose').onclick = closeSheet;
+  sheet.addEventListener('click', function (e) { if (e.target === sheet) closeSheet(); });
+
+  function when(ts) {
+    var d = new Date(ts * 1000), n = new Date();
+    var t = d.toTimeString().slice(0, 5);
+    if (d.toDateString() === n.toDateString()) return t;
+    if (d.toDateString() === new Date(n.getTime() + 864e5).toDateString()) return 'tomorrow ' + t;
+    return (d.getMonth() + 1) + '/' + d.getDate() + ' ' + t;
+  }
+
+  function replyInSheet(t) {
+    var d = document.createElement('div');
+    d.className = 'note';
+    d.textContent = t;
+    $('#rlist').appendChild(d);
+  }
+
+  function loadReminders() {
+    var list = $('#rlist');
+    list.innerHTML = '<div class="note">loading...</div>';
+    fetch('/api/reminders', { headers: headers() }).then(function (r) {
+      if (!r.ok) throw new Error('http ' + r.status);
+      return r.json();
+    }).then(function (rows) {
+      list.innerHTML = '';
+      if (!rows.length) { list.innerHTML = '<div class="note">nothing pending</div>'; return; }
+      rows.forEach(function (row) {
+        var d = document.createElement('div');
+        d.className = 'rrow';
+        d.innerHTML = '<span class="rt"></span><span class="rm"></span>' +
+                      '<span class="rr"></span><button class="rc" title="cancel">✕</button>';
+        d.querySelector('.rt').textContent = when(row.due_at);
+        d.querySelector('.rm').textContent = row.message;
+        d.querySelector('.rr').textContent = row.repeat ? '↻ ' + row.repeat : '';
+        d.querySelector('.rc').onclick = function () {
+          fetch('/api/reminders/' + row.id, { method: 'DELETE', headers: headers() })
+            .then(loadReminders).catch(loadReminders);
+        };
+        list.appendChild(d);
+      });
+    }).catch(function (e) {
+      list.innerHTML = '';
+      replyInSheet('failed to load: ' + e.message);
+    });
+  }
+
+  $('#radd').onclick = function () {
+    var m = $('#rmsg').value.trim(), at = $('#rat').value.trim(), rep = $('#rrep').value;
+    if (!m || !at) { replyInSheet('message and time are both required'); return; }
+    fetch('/api/reminders', { method: 'POST', headers: headers(),
+      body: JSON.stringify({ message: m, at: at, repeat: rep }) })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+      })
+      .then(function (res) {
+        if (res.ok) {
+          $('#rmsg').value = ''; $('#rat').value = ''; $('#rrep').value = '';
+          loadReminders();
+        } else {
+          replyInSheet((res.j && res.j.detail) || 'failed');
+        }
+      }).catch(function (e) { replyInSheet('failed: ' + e.message); });
+  };
+
+  $('#briefBtn').onclick = function () {
+    closeRail(); closeSheet();
+    if (busy) { note('still working...'); return; }
+    hideEmpty();
+    add('Brief me', 'msg me');
+    var el = addAssistant('working on it...');
+    busy = true; setDot('busy');
+    fetch('/api/briefing', { method: 'POST', headers: headers() })
+      .then(function (r) {
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.json();
+      })
+      .then(function (res) { renderMd(el, res.text || '(empty briefing)'); scroll(); })
+      .catch(function (e) { el.textContent = 'Briefing failed: ' + e.message; })
+      .then(function () { busy = false; setDot('on'); loadSessions(); });
   };
 
   // ---- websocket ----

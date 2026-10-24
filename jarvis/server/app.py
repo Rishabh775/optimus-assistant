@@ -6,17 +6,22 @@ Agent pipeline to a phone (PWA) over the tailnet / LAN:
   REST (Bearer token):
     GET  /api/health              liveness probe (no token)
     POST /api/login               token check for the login screen
-    GET  /api/status              basic machine info
+    GET  /api/status              basic machine info (+ reminders health)
     POST /api/sessions            new chat session
     GET  /api/sessions            sidebar list (newest first)
     GET  /api/sessions/{sid}/messages
     PATCH /api/sessions/{sid}     {title}
     DELETE /api/sessions/{sid}    delete + cascade messages
+    GET  /api/reminders           pending reminders (scheduler/proactive.py)
+    POST /api/reminders           {message, at, repeat} -> schedule
+    DELETE /api/reminders/{rid}   cancel a pending reminder
+    POST /api/briefing            composed daily briefing (sync in pool)
 
   WS   /ws?token=     chat channel (streaming):
        {"type":"chat","session_id":...,"text":...}
        -> {"type":"hello"|"delta"|"reply"|"confirm"|"note"|"error"}
        reply/confirm semantics unchanged; deltas stream the final answer.
+       Fired reminders surface live as {"type":"note"} on every open chat.
 
 Security:
   - every endpoint except /api/health requires the auth token
@@ -86,6 +91,12 @@ class _TitleIn(BaseModel):
     title: str
 
 
+class _ReminderIn(BaseModel):
+    message: str
+    at: str
+    repeat: str = ""
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Soundwave", docs_url=None, redoc_url=None)
     token = ensure_token()
@@ -93,6 +104,19 @@ def create_app() -> FastAPI:
     scheduler.start()                        # reminders, same rows as CLI modes
     notify_on = push.install()               # phone push off => TTS/log-only
     briefing.install()                       # scheduled daily briefing
+
+    # live WS connections get proactive events (fired reminders) as notes
+    _live_ws: list = []                      # (loop, threadsafeSender)
+
+    def _proactive_note(r: dict) -> None:
+        mark = "Missed reminder" if r.get("missed") else "Reminder"
+        for loop, send in list(_live_ws):
+            try:
+                send({"type": "note", "text": f"{mark}: {r['message']}"})
+            except Exception:
+                pass
+
+    scheduler.add_listener(_proactive_note)
 
     def _token_ok(candidate: str | None) -> bool:
         return bool(candidate) and secrets.compare_digest(candidate, token)
@@ -156,6 +180,37 @@ def create_app() -> FastAPI:
         store.delete_session(sid)
         return {"ok": True}
 
+    # ---- proactive loop: reminders + briefing on demand ----
+
+    @app.get("/api/reminders")
+    def list_reminders(authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        return scheduler.list_pending()
+
+    @app.post("/api/reminders")
+    def add_reminder(body: _ReminderIn,
+                     authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        try:
+            return scheduler.add(body.message, body.at, body.repeat or "")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    @app.delete("/api/reminders/{rid}")
+    def del_reminder(rid: str,
+                     authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        if not scheduler.cancel(rid):
+            raise HTTPException(status_code=404,
+                                detail="no pending reminder with that id")
+        return {"ok": True}
+
+    @app.post("/api/briefing")
+    def briefing_ep(authorization: str | None = Header(default=None)):
+        # plain def -> FastAPI runs it in the worker pool (IMAP can be slow)
+        _bearer(authorization)
+        return {"title": "Briefing", "text": briefing.build()}
+
     # ---- PWA ----
 
     @app.get("/")
@@ -203,6 +258,8 @@ def create_app() -> FastAPI:
 
         await _send({"type": "hello", "machine": socket.gethostname()})
 
+        entry = (loop, _send_threadsafe)
+        _live_ws.append(entry)
         def _agent_for(sid: str) -> Agent:
             """Reuse a session's Agent, rebuilding its history from the DB."""
             a = agents.get(sid)
@@ -240,40 +297,44 @@ def create_app() -> FastAPI:
             finally:
                 state["busy"] = False
 
-        while True:
-            try:
-                msg = await ws.receive_json()
-            except WebSocketDisconnect:
-                return
-            except ValueError:  # non-JSON frame
-                continue
-            kind = msg.get("type")
-            if kind == "chat":
-                text = (msg.get("text") or "").strip()
-                if not text:
-                    await _send({"type": "note", "text": "empty"})
-                elif state["busy"]:
-                    await _send({"type": "note", "text": "busy"})
-                else:
-                    sid = msg.get("session_id")
-                    created = not sid or not store.session_exists(sid)
-                    if created:
-                        sid = store.new_session()["id"]
+        try:
+            while True:
+                try:
+                    msg = await ws.receive_json()
+                except WebSocketDisconnect:
+                    return
+                except ValueError:  # non-JSON frame
+                    continue
+                kind = msg.get("type")
+                if kind == "chat":
+                    text = (msg.get("text") or "").strip()
+                    if not text:
+                        await _send({"type": "note", "text": "empty"})
+                    elif state["busy"]:
+                        await _send({"type": "note", "text": "busy"})
                     else:
-                        existing = store.get_session(sid)
-                        if existing and not existing["title"]:
-                            created = True   # untitled -> auto-title
-                    state["busy"] = True
-                    # persist the user turn *before* the long ask call
-                    store.add_message(sid, "user", text)
-                    if created:
-                        store.rename_session(sid, text[:38])
-                    asyncio.create_task(run_chat(sid, text))
-            elif kind == "confirm":
-                fut = pending.get(msg.get("id"))
-                if fut and not fut.done():
-                    fut.set_result(bool(msg.get("answer")))
-            else:
-                await _send({"type": "note", "text": "unknown type"})
+                        sid = msg.get("session_id")
+                        created = not sid or not store.session_exists(sid)
+                        if created:
+                            sid = store.new_session()["id"]
+                        else:
+                            existing = store.get_session(sid)
+                            if existing and not existing["title"]:
+                                created = True   # untitled -> auto-title
+                        state["busy"] = True
+                        # persist the user turn *before* the long ask call
+                        store.add_message(sid, "user", text)
+                        if created:
+                            store.rename_session(sid, text[:38])
+                        asyncio.create_task(run_chat(sid, text))
+                elif kind == "confirm":
+                    fut = pending.get(msg.get("id"))
+                    if fut and not fut.done():
+                        fut.set_result(bool(msg.get("answer")))
+                else:
+                    await _send({"type": "note", "text": "unknown type"})
+        finally:
+            if entry in _live_ws:
+                _live_ws.remove(entry)
 
     return app

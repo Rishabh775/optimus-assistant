@@ -11,6 +11,9 @@ TOK = "test-token-12345"
 @pytest.fixture(autouse=True)
 def tmp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_APP_DB", str(tmp_path / "chats.db"))
+    monkeypatch.setenv("JARVIS_REMINDER_DB", str(tmp_path / "reminders.db"))
+    for k in ("JARVIS_NTFY_URL", "JARVIS_NTFY_TOPIC", "JARVIS_BRIEFING_TIME"):
+        monkeypatch.delenv(k, raising=False)
 
 
 @pytest.fixture()
@@ -175,3 +178,48 @@ def test_ws_confirm_flow_denied(client, monkeypatch):
         ws.send_json({"type": "confirm", "id": c["id"], "answer": False})
         r = ws.receive_json()
         assert r["type"] == "reply" and r["text"] == "DENIED"
+
+
+# ---- proactive loop endpoints (reminders + briefing) ----
+
+def test_reminders_require_token(client):
+    assert client.get("/api/reminders").status_code == 403
+    assert client.post("/api/reminders",
+                       json={"message": "x", "at": "in 1 hour"}).status_code == 403
+    assert client.delete("/api/reminders/nope").status_code == 403
+    assert client.post("/api/briefing").status_code == 403
+
+
+def test_reminders_crud_roundtrip(client):
+    assert client.get("/api/reminders", headers=_auth(client)).json() == []
+    r = client.post("/api/reminders", headers=_auth(client),
+                    json={"message": "test ping", "at": "in 5 minutes"})
+    assert r.status_code == 200
+    rid = r.json()["id"]
+    assert r.json() == {"id": rid, "message": "test ping",
+                        "due_at": r.json()["due_at"], "repeat": "",
+                        "status": "pending"}
+    assert len(client.get("/api/reminders", headers=_auth(client)).json()) == 1
+    r = client.post("/api/reminders", headers=_auth(client),
+                    json={"message": "bad", "at": "not a time"})
+    assert r.status_code == 400
+    assert "cannot parse time" in r.json()["detail"]
+    assert client.delete(f"/api/reminders/{rid}",
+                         headers=_auth(client)).json() == {"ok": True}
+    assert client.get("/api/reminders", headers=_auth(client)).json() == []
+    assert client.delete(f"/api/reminders/{rid}",
+                         headers=_auth(client)).status_code == 404
+
+
+def test_briefing_on_demand(client, monkeypatch):
+    import jarvis.briefing as b
+    monkeypatch.setattr(b, "build", lambda: "ORDERED LINE")
+    r = client.post("/api/briefing", headers=_auth(client))
+    assert r.status_code == 200
+    assert r.json() == {"title": "Briefing", "text": "ORDERED LINE"}
+
+
+def test_status_reports_reminders(client):
+    d = client.get("/api/status", headers=_auth(client)).json()
+    assert d["reminders"]["pending"] == 0
+    assert d["reminders"]["push"] is False

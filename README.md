@@ -299,6 +299,17 @@ remove it from backups), answers stream in token-by-token over the
 WebSocket (markdown rendered client-side). Tool-call turns are silent
 until the final answer streams.
 
+The rail header has two one-tap actions:
+
+- **⌛ Reminders** — a sheet listing pending reminders (fire time, message,
+  repeat tag) with one-tap cancel and add-form (`message`, `when`, repeat).
+  Fired reminders appear live as in-chat notes on any open chat.
+- **☀️ Brief me** — composes the daily briefing instantly (weather +
+  calendar + email + reminders; sections skip what is unconfigured).
+
+REST endpoints backing these: `GET/POST /api/reminders`,
+`DELETE /api/reminders/{id}`, `POST /api/briefing` (all token-gated).
+
 For access from anywhere, run both endpoints through
 [Tailscale](https://tailscale.com) (free for personal use):
 
