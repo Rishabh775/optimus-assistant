@@ -87,6 +87,12 @@ DEFAULTS = {
     "JARVIS_SCHED_TICK": "20",
     # IANA timezone for reminder/briefing times; empty = system local
     "JARVIS_TZ": "",
+    # proactive p2: phone push for fired reminders (push.py). URL+topic both
+    # required: "https://ntfy.sh" to start, self-hosted later via
+    # http://<tailnet-ip>:2580. Token optional (auth-forcing ntfy servers).
+    "JARVIS_NTFY_URL": "",
+    "JARVIS_NTFY_TOPIC": "",
+    "JARVIS_NTFY_TOKEN": "",
 }
 
 

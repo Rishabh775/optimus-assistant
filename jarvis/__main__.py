@@ -439,8 +439,10 @@ def main():
         return
 
     # proactive loop: durable reminders (all long-running modes)
-    from . import scheduler
+    from . import scheduler, push
     scheduler.start()
+    pushed = push.install()
+    print(f"reminders: scheduler up (push {'on' if pushed else 'off'})")
 
     if args.mode == "text":
         text_loop(agent)

@@ -47,7 +47,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import config
-from .. import scheduler
+from .. import push, scheduler
 from ..agent import Agent
 from . import store
 
@@ -90,7 +90,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Soundwave", docs_url=None, redoc_url=None)
     token = ensure_token()
     store.init()
-    scheduler.start()      # reminders (same SQLite rows as the CLI modes)
+    scheduler.start()                        # reminders, same rows as CLI modes
+    notify_on = push.install()               # phone push off => TTS/log-only
 
     def _token_ok(candidate: str | None) -> bool:
         return bool(candidate) and secrets.compare_digest(candidate, token)
@@ -115,7 +116,9 @@ def create_app() -> FastAPI:
     def st(authorization: str | None = Header(default=None)):
         _bearer(authorization)
         return {"ok": True, "machine": socket.gethostname(),
-                "system": f"{os.uname().sysname} {os.uname().release}"}
+                "system": f"{os.uname().sysname} {os.uname().release}",
+                "reminders": {"pending": len(scheduler.list_pending()),
+                              "push": notify_on}}
 
     # ---- sessions (ChatGPT-style right rail) ----
 

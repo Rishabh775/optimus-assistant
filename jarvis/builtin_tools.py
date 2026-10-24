@@ -248,7 +248,20 @@ def self_status() -> str:
         f"tools: {len(TOOL_FUNCS)} registered",
         f"confirm mode: {'AUTO - never asks' if g('JARVIS_AUTO', '0') == '1' else 'asking (JARVIS_CONFIRM=1)'}",
         f"durable facts: {nfacts} (facts.jsonl; separate from Chroma conversation memory)",
+        *_reminders_status(),
     ])
+
+
+def _reminders_status() -> list:
+    "Proactive-loop health line for self_status: pending count + push state."
+    try:
+        from . import scheduler, push
+        state = "ON -> " + os.getenv("JARVIS_NTFY_URL", "") \
+            if push.push_configured() else "off"
+        return [f"reminders: {len(scheduler.list_pending())} pending, "
+                f"push {state}"]
+    except Exception:
+        return []
 
 
 def web_search(query: str, n: int = 5) -> str:

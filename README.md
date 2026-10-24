@@ -57,11 +57,19 @@ Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs 
 
 ## Proactive loop (reminders)
 
-A background scheduler thread runs in **every** long-running mode (text, voice, wake, hotkey) and in the phone-app server, so a reminder set in one place fires everywhere the assistant can reach you. Reminders are notify-only: firing delivers text (console log today; ntfy push + speaker + WS notes are phasing in) — the scheduler never runs the agent by itself.
+A background scheduler thread runs in **every** long-running mode (text, voice, wake, hotkey) and in the phone-app server, so a reminder set in one place reaches you everywhere the assistant can.
+
+Reminders are notify-only: firing delivers through the listener chain below; the scheduler never runs the agent by itself.
 
 - Survive reboots via SQLite (`JARVIS_REMINDER_DB`); anything past-due on startup fires as `(missed)`
 - `JARVIS_TZ` overrides the system timezone for reminder times ("Asia/Kolkata")
 - Two processes racing is safe: each fire is claimed with a conditional SQLite UPDATE, so a reminder is delivered exactly once
+
+Delivery chain upon a fire:
+
+1. **Phone push via ntfy** (`JARVIS_NTFY_URL` + `JARVIS_NTFY_TOPIC` to enable — start with `"https://ntfy.sh"`, self-host later at `http://<tailnet-ip>:2580`; optional `JARVIS_NTFY_TOKEN`)
+2. **Speaker announcement** in modes that already have the voice stack loaded (voice/wake) — text mode and the server stay silent, they never load STT just for a reminder
+3. **Console/log line** always (the base listener)
 
 ## Routing
 
