@@ -46,7 +46,26 @@ CREATE TABLE IF NOT EXISTS reminders (
     fired_at   REAL
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(status, due_at);
+CREATE TABLE IF NOT EXISTS daily_runs (
+    name      TEXT PRIMARY KEY,
+    last_date TEXT NOT NULL,
+    last_ts   REAL NOT NULL
+);
 """
+_DAILY = {}
+_DAILY_LOCK = threading.Lock()
+_HHMM_RE = re.compile(r"(\d{1,2}):(\d{2})")
+
+
+def add_daily(name: str, at: str, fn) -> bool:
+    """Register a scheduled daily job ("07:30" local). Runs at most once per
+    day, persisted across restarts in daily_runs. fn() -> any."""
+    m = _HHMM_RE.fullmatch(at.strip())
+    if not m or not (0 <= int(m.group(1)) < 24 and 0 <= int(m.group(2)) < 60):
+        raise ValueError(f"bad daily time {at!r} -- use 'HH:MM'")
+    with _DAILY_LOCK:
+        _DAILY[name] = (int(m.group(1)), int(m.group(2)), fn)
+    return True
 
 
 def db_path() -> Path:
@@ -265,15 +284,51 @@ def _tick(now: float = None) -> list:
         for r in rows:
             d = _row(r)
             if _claim(conn, d, now):
-                d["missed"] = (now - d["due_at"]) > _MISSED_GRACE
-                if d["missed"]:
-                    log.info("missed reminder (restart catch-up): %s",
-                             d["message"])
-                _deliver(d)
-                fired.append(d)
+                    d["missed"] = (now - d["due_at"]) > _MISSED_GRACE
+                    if d["missed"]:
+                        log.info("missed reminder (restart catch-up): %s",
+                                 d["message"])
+                    _deliver(d)
+                    fired.append(d)
+        _sweep_daily(now)
     finally:
         conn.close()
     return fired
+
+
+# ------------------------------------------------- daily scheduled jobs ---
+
+def _daily_run_date(name: str) -> str:
+    conn = _connect()
+    try:
+        r = conn.execute("SELECT last_date FROM daily_runs WHERE name=?",
+                         (name,)).fetchone()
+    finally:
+        conn.close()
+    return r[0] if r else ""
+
+
+def _sweep_daily(now: float) -> None:
+    """Run any registered daily job whose local time has come (once/day)."""
+    lt = datetime.fromtimestamp(now, tz=_local_tz())
+    today = lt.strftime("%Y-%m-%d")
+    for name, (hh, mm, fn) in list(_DAILY.items()):
+        target = lt.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if lt.timestamp() < target.timestamp() or _daily_run_date(name) == today:
+            continue
+        conn = _connect()
+        try:
+            with conn:
+                conn.execute(
+                    "INSERT INTO daily_runs (name, last_date, last_ts)"
+                    " VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET"
+                    " last_date=?, last_ts=?", (name, today, now, today, now))
+        finally:
+            conn.close()
+        try:
+            fn()
+        except Exception:
+            log.exception("daily job %s failed", name)
 
 
 # -------------------------------------------------------------- the loop --

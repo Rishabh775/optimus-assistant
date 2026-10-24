@@ -93,6 +93,13 @@ DEFAULTS = {
     "JARVIS_NTFY_URL": "",
     "JARVIS_NTFY_TOPIC": "",
     "JARVIS_NTFY_TOKEN": "",
+    # proactive p3: daily briefing. Empty = off; "07:30" delivers a composed
+    # summary (weather/calendar/email/reminders) at that local time.
+    "JARVIS_BRIEFING_TIME": "",
+    # location for the weather section/tool
+    "JARVIS_LAT": "",
+    "JARVIS_LON": "",
+    "JARVIS_WEATHER_CITY": "",
 }
 
 

@@ -65,15 +65,17 @@ def send(title: str, message: str) -> bool:
 
 # ------------------------------------------------------------ listeners ---
 
-def _speak_if_voice(r: dict) -> None:
-    """Announce on THIS machine's speakers, voice modes only."""
+def speak_local(text: str) -> None:
+    """Announce text on THIS machine's speakers, voice modes only.
+
+    No-op when this process is not running a voice mode -- we never load
+    the STT stack just for an announcement."""
     if "jarvis.voice" not in sys.modules:
         return
     try:
         from .voice import speak
-        mark = "Missed reminder" if r.get("missed") else "Reminder"
-        speak(f"{mark}: {r['message']}", blocking=False)
-        log.info("reminder announced on speaker: %s", r["message"])
+        speak(text, blocking=False)
+        log.info("announced on speaker: %s", text[:60])
     except Exception:
         log.exception("speaker announcement failed")
 
@@ -83,7 +85,7 @@ def _deliver(r: dict) -> None:
     mark = "Missed reminder" if r.get("missed") else "Reminder"
     if send(mark, r["message"]):
         log.info("reminder pushed: %s", r["message"])
-    _speak_if_voice(r)
+    speak_local(f"{mark}: {r['message']}")
 
 
 def install() -> bool:

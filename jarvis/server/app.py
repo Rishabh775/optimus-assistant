@@ -47,7 +47,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import config
-from .. import push, scheduler
+from .. import briefing, push, scheduler
 from ..agent import Agent
 from . import store
 
@@ -92,6 +92,7 @@ def create_app() -> FastAPI:
     store.init()
     scheduler.start()                        # reminders, same rows as CLI modes
     notify_on = push.install()               # phone push off => TTS/log-only
+    briefing.install()                       # scheduled daily briefing
 
     def _token_ok(candidate: str | None) -> bool:
         return bool(candidate) and secrets.compare_digest(candidate, token)

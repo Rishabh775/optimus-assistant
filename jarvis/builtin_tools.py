@@ -410,6 +410,20 @@ def cancel_reminder(id: str) -> str:
             else f"error: no pending reminder #{id}")
 
 
+# ---- proactive loop p3: weather + daily briefing (briefing.py) ----
+
+def weather(city: str = "") -> str:
+    """Current conditions + today/tomorrow forecast (Open-Meteo, keyless)."""
+    from .briefing import weather as f
+    return f(city)
+
+
+def daily_briefing() -> str:
+    """Compose the morning briefing (weather/calendar/email/reminders)."""
+    from .briefing import build
+    return build()
+
+
 def ha_list_entities(domain: str = "") -> str:
     from .tools.homeassistant import ha_list_entities
     return ha_list_entities(domain or None)
@@ -713,6 +727,26 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "weather",
+        "description": ("Weather report: current conditions + today and "
+                        "tomorrow forecast. Pass a city name, or no arg to "
+                        "use the configured home location (JARVIS_LAT/"
+                        "JARVIS_LON or JARVIS_WEATHER_CITY)."),
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+        },
+    },
+    {
+        "name": "daily_briefing",
+        "description": ("Compose the daily briefing: weather + today's "
+                        "calendar + top unread email + today's reminders. "
+                        "Use for 'brief me' / 'how's my day' / good-morning "
+                        "asks. Also delivered on schedule at "
+                        "JARVIS_BRIEFING_TIME."),
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
         "name": "ha_list_entities",
         "description": "List Home Assistant entities, optionally filtered by domain (light, switch, sensor...).",
         "parameters": {
@@ -785,6 +819,8 @@ TOOL_FUNCS = {
     "remind_me": remind_me,
     "list_reminders": list_reminders,
     "cancel_reminder": cancel_reminder,
+    "weather": weather,
+    "daily_briefing": daily_briefing,
     "ha_list_entities": ha_list_entities,
     "ha_state": ha_state,
     "ha_call": ha_call,

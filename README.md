@@ -51,6 +51,7 @@ python -m jarvis --query "..."    # one-shot
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
 | `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
+| `weather`, `daily_briefing` | Open-Meteo weather (no key, home location via `JARVIS_LAT/LON`); composite morning briefing (weather + calendar + email + reminders) also scheduled via `JARVIS_BRIEFING_TIME` |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
@@ -70,6 +71,18 @@ Delivery chain upon a fire:
 1. **Phone push via ntfy** (`JARVIS_NTFY_URL` + `JARVIS_NTFY_TOPIC` to enable — start with `"https://ntfy.sh"`, self-host later at `http://<tailnet-ip>:2580`; optional `JARVIS_NTFY_TOKEN`)
 2. **Speaker announcement** in modes that already have the voice stack loaded (voice/wake) — text mode and the server stay silent, they never load STT just for a reminder
 3. **Console/log line** always (the base listener)
+
+## Daily briefing (proactive loop p3)
+
+The scheduler also supports once-per-day jobs, persisted across reboots (`daily_runs` table). The built-in one is the morning briefing:
+
+- enable with `JARVIS_BRIEFING_TIME=07:30` (local time; empty = off)
+- content: weather + today's calendar + top unread email triage + today's reminders
+- every section degrades quietly when its integration is unconfigured or down — a dead IMAP server can't kill the briefing
+- delivery: ntfy push + speaker announcement (voice modes) + phone-app WS in a later phase
+- on demand: the agent has the `daily_briefing` tool for "brief me" / "how's my day"
+
+Weather uses **Open-Meteo — no API key**. Configure the home location with `JARVIS_LAT`/`JARVIS_LON` (recommended; no geocoding hop) or `JARVIS_WEATHER_CITY="Hyderabad"`; the `weather` tool accepts an explicit city too.
 
 ## Routing
 
@@ -204,6 +217,8 @@ jarvis/                      # python package
 ├── facts.py         # durable user facts (facts.jsonl)
 ├── config.py        # central settings + validation
 ├── scheduler.py     # proactive loop: durable reminders + fire loop
+├── push.py          # delivery: ntfy phone push + speaker announce
+├── briefing.py      # daily briefing (weather/calendar/email/reminders)
 ├── audio.py         # shared gain/energy/warning helpers
 ├── log.py           # leveled logging (JARVIS_LOG_LEVEL)
 ├── sounds.py        # ack/end chirps (generated, no assets)
