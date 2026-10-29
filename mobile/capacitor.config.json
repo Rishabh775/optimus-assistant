@@ -1,0 +1,13 @@
+{
+  "appId": "com.rishabh.soundwave",
+  "appName": "Soundwave",
+  "webDir": "www",
+  "server": {
+    "url": "https://cachyos-x8664.tailb763b1.ts.net",
+    "cleartext": false,
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

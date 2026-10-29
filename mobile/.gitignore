@@ -1,0 +1,10 @@
+# Capacitor / Android build artifacts (source only in git)
+node_modules/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+android/app/src/main/assets/public/
+*.apk
+*.aab

@@ -310,6 +310,27 @@ The rail header has two one-tap actions:
 REST endpoints backing these: `GET/POST /api/reminders`,
 `DELETE /api/reminders/{id}`, `POST /api/briefing` (all token-gated).
 
+### Voice notes, photos and documents from the phone
+
+The composer has two extra buttons:
+
+- **📎 attach** — camera, gallery or any document; uploads via
+  `POST /api/upload` (size cap `JARVIS_APP_UPLOAD_MAX_MB`, default 25 MB,
+  saved under `JARVIS_APP_UPLOAD_DIR`, sanitized filenames). Files ride
+  along with the next chat message; only paths inside the uploads dir are
+  accepted back, and the agent sees the paths so `read_file`/`shell_run`
+  can inspect them.
+- **🎙 voice note** — tap to record, tap to stop; audio is transcribed
+  server-side via the same faster-whisper model (`POST /api/transcribe`),
+  then dropped into the message box for editing before sending.
+
+### Native Android app
+
+`mobile/` is a Capacitor shell around this same UI: real launcher icon,
+no browser chrome, native camera/mic/file permissions. See
+[`mobile/README.md`](mobile/README.md); build with `mobile/build.sh`
+(JDK 21 + Android SDK 35) and sideload the debug APK.
+
 For access from anywhere, run both endpoints through
 [Tailscale](https://tailscale.com) (free for personal use):
 
