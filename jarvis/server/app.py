@@ -16,12 +16,16 @@ Agent pipeline to a phone (PWA) over the tailnet / LAN:
     POST /api/reminders           {message, at, repeat} -> schedule
     DELETE /api/reminders/{rid}   cancel a pending reminder
     POST /api/briefing            composed daily briefing (sync in pool)
+    POST /api/upload              multipart file (photo/doc) -> saved path
+    POST /api/transcribe          multipart audio (voice note) -> text (STT)
 
   WS   /ws?token=     chat channel (streaming):
-       {"type":"chat","session_id":...,"text":...}
+       {"type":"chat","session_id":...,"text":...,"attachments":[...]}
        -> {"type":"hello"|"delta"|"reply"|"confirm"|"note"|"error"}
        reply/confirm semantics unchanged; deltas stream the final answer.
        Fired reminders surface live as {"type":"note"} on every open chat.
+       attachments: files previously returned by /api/upload; their paths
+       are added to the agent turn (marker lines) so tools can read them.
 
 Security:
   - every endpoint except /api/health requires the auth token
@@ -36,15 +40,18 @@ reopening the PWA continues the conversation.
 """
 import asyncio
 import os
+import re
 import secrets
 import socket
+import tempfile
 import time
 import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from dotenv import load_dotenv, set_key
-from fastapi import FastAPI, Header, HTTPException, WebSocket, status
+from fastapi import (FastAPI, File, Header, HTTPException, UploadFile,
+                     WebSocket, status)
 from fastapi.websockets import WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security.utils import get_authorization_scheme_param
@@ -64,6 +71,39 @@ _STATIC = Path(__file__).resolve().parent / "static"
 
 # Keep the Agent's in-RAM history bounded like the voice loop does.
 _MSG_WINDOW = 40
+
+_UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_AUDIO_SUFFIXES = {".webm", ".m4a", ".mp3", ".wav", ".ogg", ".opus",
+                   ".aac", ".flac", ".3gp"}
+_MAX_ATTACHMENTS = 5
+
+
+def _uploads_dir() -> Path:
+    raw = config.get("JARVIS_APP_UPLOAD_DIR")
+    if not raw:
+        raise RuntimeError("JARVIS_APP_UPLOAD_DIR is empty")
+    p = Path(raw)
+    if not p.is_absolute():
+        p = _REPO_ROOT / raw
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _safe_name(name: str) -> str:
+    base = Path(str(name or "file")).name
+    cleaned = _UPLOAD_NAME_RE.sub("_", base).strip("._") or "file"
+    return cleaned[-80:]
+
+
+def _upload_allowed(raw: str) -> Path | None:
+    """Only paths returned by /api/upload may be attached from the phone."""
+    try:
+        p = Path(str(raw)).resolve()
+        root = _uploads_dir().resolve()
+        p.relative_to(root)              # raises if outside the uploads dir
+    except (ValueError, OSError, RuntimeError):
+        return None
+    return p if p.is_file() else None
 
 
 def ensure_token() -> str:
@@ -211,6 +251,59 @@ def create_app() -> FastAPI:
         _bearer(authorization)
         return {"title": "Briefing", "text": briefing.build()}
 
+    @app.post("/api/upload")
+    def upload_file(file: UploadFile = File(...),
+                    authorization: str | None = Header(default=None)):
+        """Save a phone photo/document. Returns the path to attach to a chat."""
+        _bearer(authorization)
+        max_mb = config.get_int("JARVIS_APP_UPLOAD_MAX_MB") or 25
+        limit = max_mb * 1024 * 1024
+        data = file.file.read(limit + 1)
+        if len(data) > limit:
+            raise HTTPException(status_code=413,
+                                detail=f"file exceeds {max_mb} MB")
+        if not data:
+            raise HTTPException(status_code=400, detail="empty file")
+        name = _safe_name(file.filename or "file")
+        dest = _uploads_dir() / time.strftime("%Y%m%d") / \
+            f"{uuid.uuid4().hex[:8]}_{name}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return {"path": str(dest), "name": name, "size": len(data),
+                "mime": file.content_type or ""}
+
+    @app.post("/api/transcribe")
+    def transcribe_audio(file: UploadFile = File(...),
+                         authorization: str | None = Header(default=None)):
+        """Voice note -> text via the existing faster-whisper stack."""
+        _bearer(authorization)
+        suffix = Path(file.filename or "note.webm").suffix.lower()
+        if suffix not in _AUDIO_SUFFIXES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"unsupported audio type {suffix or '(none)'}")
+        fd, tmp = tempfile.mkstemp(suffix=suffix, dir=str(_uploads_dir()))
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                while chunk := file.file.read(1024 * 1024):
+                    fh.write(chunk)
+            from ..voice import transcribe_file
+            text = (transcribe_file(tmp) or "").strip()
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500,
+                                detail=f"transcription failed: {e}")
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if not text:
+            raise HTTPException(status_code=422,
+                                detail="no speech detected in the recording")
+        return {"text": text}
+
     # ---- PWA ----
 
     @app.get("/")
@@ -308,7 +401,16 @@ def create_app() -> FastAPI:
                 kind = msg.get("type")
                 if kind == "chat":
                     text = (msg.get("text") or "").strip()
-                    if not text:
+                    atts = []
+                    for a in (msg.get("attachments") or [])[:_MAX_ATTACHMENTS]:
+                        if not isinstance(a, dict):
+                            continue
+                        p = _upload_allowed(a.get("path", ""))
+                        if p:
+                            atts.append({"path": str(p),
+                                         "name": a.get("name") or p.name,
+                                         "mime": a.get("mime") or ""})
+                    if not text and not atts:
                         await _send({"type": "note", "text": "empty"})
                     elif state["busy"]:
                         await _send({"type": "note", "text": "busy"})
@@ -322,11 +424,20 @@ def create_app() -> FastAPI:
                             if existing and not existing["title"]:
                                 created = True   # untitled -> auto-title
                         state["busy"] = True
+                        body = text
+                        if atts:
+                            body += ("\n\n[Attached files - use read_file or "
+                                     "shell_run to inspect]\n")
+                            body += "\n".join(
+                                f"📎 {a['name']} ({a['mime'] or 'file'}): "
+                                f"{a['path']}" for a in atts)
+                        body = body.strip()
                         # persist the user turn *before* the long ask call
-                        store.add_message(sid, "user", text)
+                        store.add_message(sid, "user", body)
                         if created:
-                            store.rename_session(sid, text[:38])
-                        asyncio.create_task(run_chat(sid, text))
+                            title = text or (atts[0]["name"] if atts else "")
+                            store.rename_session(sid, title[:38])
+                        asyncio.create_task(run_chat(sid, body))
                 elif kind == "confirm":
                     fut = pending.get(msg.get("id"))
                     if fut and not fut.done():

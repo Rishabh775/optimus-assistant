@@ -75,6 +75,9 @@ DEFAULTS = {
     # SQLite chat store (relative to the repo root); JARVIS_APP_DB="" keeps
     # history in RAM only (wallet, sessions die with the process).
     "JARVIS_APP_DB": "data/phone-app/chats.db",
+    # uploads from the phone (photos/documents/voice notes) land here
+    "JARVIS_APP_UPLOAD_DIR": "data/phone-app/uploads",
+    "JARVIS_APP_UPLOAD_MAX_MB": "25",
     # JARVIS_APP_TOKEN is generated into .env on first run if unset.
     # persona of the assistant: soundwave | jarvis | glados | off
     # (or free text: any other value is used verbatim as a personality hint)

@@ -193,3 +193,23 @@ def test_hysteresis_still_stops_on_silence(fake_mic, monkeypatch):
     fake_mic.script = [(3000, 10), ("Q", 60)]   # speech then real silence
     dur = _capture_dur(fake_mic, monkeypatch)
     assert 0.8 < dur < 2.5, dur   # ends ~1s of speech + end-silence (300ms test)
+
+
+def test_transcribe_file_falls_back_when_pyav_breaks(monkeypatch):
+    """PyAV >= 19 rejects faster-whisper's metadata_errors -> ffmpeg path."""
+    import jarvis.voice as voice
+
+    class Seg:
+        text = " hello there "
+
+    class FakeModel:
+        def transcribe(self, audio, **kw):
+            if isinstance(audio, str):
+                raise TypeError(
+                    "open() got an unexpected keyword argument 'metadata_errors'")
+            return iter([Seg()]), None
+
+    monkeypatch.setattr(voice, "get_stt", lambda *a, **k: FakeModel())
+    monkeypatch.setattr(voice, "_stt_backend", lambda: "faster")
+    monkeypatch.setattr(voice, "_decode_audio_f32", lambda p: [0.0] * 16000)
+    assert voice.transcribe_file("/tmp/voice.webm") == "hello there"

@@ -12,6 +12,7 @@ TOK = "test-token-12345"
 def tmp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_APP_DB", str(tmp_path / "chats.db"))
     monkeypatch.setenv("JARVIS_REMINDER_DB", str(tmp_path / "reminders.db"))
+    monkeypatch.setenv("JARVIS_APP_UPLOAD_DIR", str(tmp_path / "uploads"))
     for k in ("JARVIS_NTFY_URL", "JARVIS_NTFY_TOPIC", "JARVIS_BRIEFING_TIME"):
         monkeypatch.delenv(k, raising=False)
 
@@ -223,3 +224,97 @@ def test_status_reports_reminders(client):
     d = client.get("/api/status", headers=_auth(client)).json()
     assert d["reminders"]["pending"] == 0
     assert d["reminders"]["push"] is False
+
+
+# ---- uploads / voice notes (Android + PWA attachments) ----
+
+def test_upload_requires_token(client):
+    r = client.post("/api/upload", files={"file": ("a.jpg", b"x", "image/jpeg")})
+    assert r.status_code == 403
+    r = client.post("/api/transcribe", files={"file": ("a.webm", b"x", "audio/webm")})
+    assert r.status_code == 403
+
+
+def test_upload_saves_file_and_returns_path(client):
+    r = client.post("/api/upload", headers=_auth(client),
+                    files={"file": ("my photo.jpg", b"JPEGDATA", "image/jpeg")})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["name"] == "my_photo.jpg"          # sanitized for the filesystem
+    assert d["size"] == 8 and d["mime"] == "image/jpeg"
+    from pathlib import Path
+    p = Path(d["path"])
+    assert p.is_file() and p.read_bytes() == b"JPEGDATA"
+
+
+def test_upload_rejects_oversize(client, monkeypatch):
+    monkeypatch.setenv("JARVIS_APP_UPLOAD_MAX_MB", "1")
+    big = b"x" * (1024 * 1024 + 1)
+    r = client.post("/api/upload", headers=_auth(client),
+                    files={"file": ("big.bin", big, "application/octet-stream")})
+    assert r.status_code == 413
+
+
+def test_upload_allowed_confines_to_uploads_dir(tmp_path):
+    import jarvis.server.app as srv
+    assert srv._upload_allowed("/etc/passwd") is None
+    assert srv._upload_allowed(str(tmp_path / "nope.jpg")) is None
+
+
+def test_transcribe_happy_path(client, monkeypatch):
+    seen = {}
+
+    def fake(path):
+        seen["path"] = path
+        assert path.endswith(".webm")
+        return "  remind me to buy milk  "
+
+    import jarvis.voice as voice
+    monkeypatch.setattr(voice, "transcribe_file", fake)
+    r = client.post("/api/transcribe", headers=_auth(client),
+                    files={"file": ("note.webm", b"AUDIO", "audio/webm")})
+    assert r.status_code == 200
+    assert r.json() == {"text": "remind me to buy milk"}
+    assert not __import__("os").path.exists(seen["path"])   # temp cleaned
+
+
+def test_transcribe_empty_and_bad_type(client, monkeypatch):
+    import jarvis.voice as voice
+    monkeypatch.setattr(voice, "transcribe_file", lambda p: "")
+    r = client.post("/api/transcribe", headers=_auth(client),
+                    files={"file": ("note.webm", b"AUDIO", "audio/webm")})
+    assert r.status_code == 422
+    r = client.post("/api/transcribe", headers=_auth(client),
+                    files={"file": ("note.exe", b"X", "application/octet-stream")})
+    assert r.status_code == 400
+
+
+def test_chat_attachment_markers_reach_agent_and_db(client, monkeypatch):
+    got = {}
+
+    class Capture:
+        history = []
+
+        def __init__(self, confirm=None):
+            pass
+
+        def ask(self, text, max_steps=None, on_delta=None):
+            got["text"] = text
+            return "ok"
+
+    monkeypatch.setattr(srv, "Agent", Capture)
+    up = client.post("/api/upload", headers=_auth(client),
+                     files={"file": ("doc.pdf", b"%PDF-1.4", "application/pdf")})
+    att = up.json()
+    with client.websocket_connect(f"/ws?token={TOK}") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "chat", "text": "summarize this",
+                      "attachments": [att]})
+        r = ws.receive_json()
+        assert r["type"] == "reply"
+    assert "[Attached files" in got["text"]
+    assert att["path"] in got["text"]
+    sid = client.get("/api/sessions", headers=_auth(client)).json()[0]["id"]
+    msgs = client.get(f"/api/sessions/{sid}/messages", headers=_auth(client)).json()
+    assert msgs[0]["role"] == "user"
+    assert att["path"] in msgs[0]["content"]

@@ -343,14 +343,35 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
         return ""
 
 
+def _decode_audio_f32(path: str) -> np.ndarray:
+    """Decode any ffmpeg-readable file to 16 kHz mono float32.
+
+    Used as an STT fallback when PyAV decoding breaks (faster-whisper calls
+    av.open(..., metadata_errors=...) which PyAV >= 19 no longer accepts)."""
+    raw = subprocess.run(
+        ["ffmpeg", "-v", "error", "-i", path, "-f", "f32le",
+         "-ac", "1", "-ar", "16000", "-"],
+        check=True, capture_output=True, timeout=180).stdout
+    return np.frombuffer(raw, dtype=np.float32).copy()
+
+
 def transcribe_file(path: str) -> str:
     model_name = config.get("JARVIS_WHISPER_MODEL")
     if _stt_backend() == "faster":
         model = get_stt(model_name)
-        segments, _info = model.transcribe(
-            path, vad_filter=True, without_timestamps=True,
-            **_stt_decode_kwargs())
-        return " ".join(s.text.strip() for s in segments).strip()
+        try:
+            segments, _info = model.transcribe(
+                path, vad_filter=True, without_timestamps=True,
+                **_stt_decode_kwargs())
+            return " ".join(s.text.strip() for s in segments).strip()
+        except Exception as e:
+            # PyAV version mismatch ("metadata_errors"): decode ourselves.
+            log("voice").warning(
+                f"file STT decode via PyAV failed ({e}); using ffmpeg")
+            segments, _info = model.transcribe(
+                _decode_audio_f32(path), vad_filter=True,
+                without_timestamps=True, **_stt_decode_kwargs())
+            return " ".join(s.text.strip() for s in segments).strip()
     import whisper
     model = get_stt(model_name)
     return model.transcribe(path, **_stt_decode_kwargs(faster=False))["text"]

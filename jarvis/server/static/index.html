@@ -130,6 +130,16 @@
        background:var(--panel2);color:var(--text);font-size:16px;outline:none}
   #msg:focus{border-color:var(--accent)}
   form button{border-radius:12px}
+  #attach{background:transparent;color:var(--text);font-size:19px;padding:8px 6px}
+  #mic{background:var(--panel2);border:1px solid var(--line);color:var(--text);font-size:18px;padding:8px 10px}
+  #mic.rec{background:#ff6b6b;border-color:#ff6b6b;color:#fff;animation:pulse 1s infinite alternate}
+  #att{display:none;flex-wrap:wrap;gap:6px;padding:8px 12px 0;background:var(--panel)}
+  #att.on{display:flex}
+  .attchip{display:inline-flex;align-items:center;gap:6px;background:var(--panel2);
+           border:1px solid var(--line);border-radius:999px;padding:5px 10px;
+           font-size:12px;max-width:250px}
+  .attchip b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attchip button{background:transparent;color:var(--dim);padding:0 2px;font-size:13px}
   /* reminders sheet (proactive loop) */
   #sheet{position:fixed;inset:0;display:none;align-items:flex-end;
          justify-content:center;z-index:60;background:rgba(0,0,0,.55)}
@@ -196,8 +206,13 @@
     </header>
     <div id="log"></div>
     <div id="empty"></div>
+    <div id="att"></div>
     <form id="bar">
+      <button type="button" id="attach" title="Photo or document">📎</button>
+      <input id="file" type="file" multiple style="display:none"
+             accept="image/*,.pdf,.txt,.md,.csv,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip">
       <input id="msg" placeholder="Message..." autocomplete="off" enterkeyhint="send">
+      <button type="button" id="mic" title="Voice note">🎙</button>
       <button>Send</button>
     </form>
   </section>
@@ -521,6 +536,93 @@
       .then(function () { busy = false; setDot('on'); loadSessions(); });
   };
 
+  // ---- attachments + voice notes (works in browser and the Android shell) ----
+  var atts = [];                 // [{path,name,mime,size}] from /api/upload
+  var mediaRec = null, recChunks = [];
+
+  function renderAtts() {
+    var box = $('#att');
+    box.innerHTML = '';
+    box.classList.toggle('on', atts.length > 0);
+    atts.forEach(function (a, i) {
+      var chip = document.createElement('span');
+      chip.className = 'attchip';
+      chip.innerHTML = '<b></b><button type="button" title="remove">✕</button>';
+      chip.querySelector('b').textContent =
+        ((a.mime || '').indexOf('image') === 0 ? '🖼 ' : '📄 ') + a.name;
+      chip.querySelector('button').onclick = function () {
+        atts.splice(i, 1); renderAtts();
+      };
+      box.appendChild(chip);
+    });
+  }
+
+  $('#attach').onclick = function () { $('#file').click(); };
+  $('#file').onchange = function () {
+    var files = Array.prototype.slice.call($('#file').files || []);
+    $('#file').value = '';
+    files.forEach(function (f) {
+      var fd = new FormData();
+      fd.append('file', f, f.name);
+      note('uploading ' + f.name + '...');
+      fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: fd
+      }).then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+      }).then(function (res) {
+        if (!res.ok) throw new Error((res.j && res.j.detail) || 'upload failed');
+        atts.push(res.j);
+        renderAtts();
+        note('attached ' + res.j.name);
+      }).catch(function (e) { note('upload failed: ' + e.message); });
+    });
+  };
+
+  $('#mic').onclick = function () {
+    if (mediaRec && mediaRec.state === 'recording') { mediaRec.stop(); return; }
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      note('recording not supported in this browser');
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      var mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : '';
+      mediaRec = mime ? new MediaRecorder(stream, { mimeType: mime })
+                      : new MediaRecorder(stream);
+      recChunks = [];
+      mediaRec.ondataavailable = function (e) { if (e.data.size) recChunks.push(e.data); };
+      mediaRec.onstop = function () {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        $('#mic').classList.remove('rec');
+        var blob = new Blob(recChunks, { type: 'audio/webm' });
+        if (!blob.size) return;
+        note('transcribing voice note...');
+        var fd = new FormData();
+        fd.append('file', blob, 'voice.webm');
+        fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token },
+          body: fd
+        }).then(function (r) {
+          return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+        }).then(function (res) {
+          if (!res.ok) throw new Error((res.j && res.j.detail) || 'transcribe failed');
+          $('#msg').value = res.j.text;
+          $('#msg').focus();
+          note('voice note ready — edit and send');
+        }).catch(function (e) { note('voice note failed: ' + e.message); });
+      };
+      $('#mic').classList.add('rec');
+      note('recording... tap the mic again to stop');
+      mediaRec.start();
+    }).catch(function (e) {
+      note('mic unavailable: ' + e.message);
+    });
+  };
+  renderAtts();
+
   // ---- websocket ----
   function connect() {
     setDot('on');
@@ -623,12 +725,20 @@
 
   function send(text) {
     hideEmpty();
-    add(text, 'msg me');
+    var shown = text;
+    if (atts.length) {
+      shown += (shown ? '\n' : '') +
+        atts.map(function (a) { return '📎 ' + a.name; }).join('\n');
+    }
+    add(shown, 'msg me');
     typing = add('working on it...', 'typing');
     setDot('busy');
     busy = true;
     var p = { type: 'chat', text: text };
     if (sid) p.session_id = sid;
+    if (atts.length) { p.attachments = atts.slice(); }
+    atts = [];
+    renderAtts();
     ws.send(JSON.stringify(p));
   }
 
@@ -642,7 +752,7 @@
     $('#bar').addEventListener('submit', function (e) {
       e.preventDefault();
       var v = $('#msg').value.trim();
-      if (!v) return;
+      if (!v && !atts.length) return;
       if (!ws || ws.readyState !== 1) { note('not connected'); return; }
       if (busy) { note('still working...'); return; }
       $('#msg').value = '';
