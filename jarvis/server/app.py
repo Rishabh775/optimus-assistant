@@ -442,6 +442,8 @@ def create_app() -> FastAPI:
                     fut = pending.get(msg.get("id"))
                     if fut and not fut.done():
                         fut.set_result(bool(msg.get("answer")))
+                elif kind == "ping":
+                    await _send({"type": "pong"})
                 else:
                     await _send({"type": "note", "text": "unknown type"})
         finally:

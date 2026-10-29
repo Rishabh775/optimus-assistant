@@ -299,6 +299,12 @@ remove it from backups), answers stream in token-by-token over the
 WebSocket (markdown rendered client-side). Tool-call turns are silent
 until the final answer streams.
 
+The socket is **self-healing**: if the phone backgrounds the app, switches
+networks, or the PC restarts, the client reconnects with backoff, sends any
+message you typed while disconnected, heartbeats every 25s, and reloads the
+current chat after a dropped mid-answer connection (so a reply that finished
+server-side still shows up instead of leaving a stuck spinner).
+
 The rail header has two one-tap actions:
 
 - **⌛ Reminders** — a sheet listing pending reminders (fire time, message,

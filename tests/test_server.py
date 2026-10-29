@@ -318,3 +318,10 @@ def test_chat_attachment_markers_reach_agent_and_db(client, monkeypatch):
     msgs = client.get(f"/api/sessions/{sid}/messages", headers=_auth(client)).json()
     assert msgs[0]["role"] == "user"
     assert att["path"] in msgs[0]["content"]
+
+
+def test_ws_ping_pong_keeps_connection_alive(client):
+    with client.websocket_connect(f"/ws?token={TOK}") as ws:
+        ws.receive_json()                       # hello
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"

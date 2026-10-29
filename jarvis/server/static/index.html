@@ -623,15 +623,49 @@
   };
   renderAtts();
 
-  // ---- websocket ----
+  // ---- websocket (self-healing: reconnects, queues sends, resyncs) ----
+  var wsRetry = 0, wsTimer = null, heartbeat = null, queued = null, resync = false;
+
   function connect() {
-    setDot('on');
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
     var proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(proto + '://' + location.host + '/ws?token=' + encodeURIComponent(token));
+    ws.onopen = function () {
+      wsRetry = 0;
+      setDot('on');
+      if (heartbeat) clearInterval(heartbeat);
+      heartbeat = setInterval(function () {
+        if (ws && ws.readyState === 1) {
+          try { ws.send(JSON.stringify({ type: 'ping' })); } catch (e) {}
+        }
+      }, 25000);
+      if (resync) {                 // answer may have completed while reconnecting
+        resync = false;
+        if (sid) openSession(sid); else loadSessions();
+      }
+      if (queued) {
+        var p = queued; queued = null;
+        note('reconnected — sending queued message');
+        dispatch(p);
+      }
+    };
+    ws.onclose = function () {
+      setDot('');
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+      if (busy) {                   // socket died mid-answer: recover instead of freezing
+        busy = false;
+        resync = true;
+        if (typing) { typing.remove(); typing = null; }
+      }
+      var delay = Math.min(15000, 1000 * Math.pow(2, wsRetry++));
+      clearTimeout(wsTimer);
+      wsTimer = setTimeout(connect, delay);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
     ws.onmessage = function (e) {
       var m = JSON.parse(e.data);
-      if (m.type === 'hello') { /* connected; dot already on */ }
-      else if (m.type === 'delta') {
+      if (m.type === 'pong' || m.type === 'hello') { setDot('on'); return; }
+      if (m.type === 'delta') {
         if (m.sid !== sid) {
           if (sid) return;              // another session's stream -> ignore
           sid = m.sid;                  // brand-new chat: adopt it and stream
@@ -688,9 +722,13 @@
       else if (m.type === 'note') { note(m.text); }
       else if (m.type === 'error') { status('Token rejected.'); }
     };
-    ws.onclose = function () { setDot(''); };
-    ws.onerror = function () {};
   }
+
+  // resume/network changes: make sure the socket is alive
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && (!ws || ws.readyState > 1)) connect();
+  });
+  window.addEventListener('online', function () { connect(); });
 
   function answer(id, yes, card) {
     ws.send(JSON.stringify({ type: 'confirm', id: id, answer: yes }));
@@ -735,15 +773,33 @@
         atts.map(function (a) { return '📎 ' + a.name; }).join('\n');
     }
     add(shown, 'msg me');
-    typing = add('working on it...', 'typing');
-    setDot('busy');
-    busy = true;
     var p = { type: 'chat', text: text };
     if (sid) p.session_id = sid;
     if (atts.length) { p.attachments = atts.slice(); }
     atts = [];
     renderAtts();
-    ws.send(JSON.stringify(p));
+    if (!ws || ws.readyState !== 1) {
+      queued = p;             // reconnects automatically, then sends
+      note('not connected — reconnecting, your message will send itself');
+      connect();
+      return;
+    }
+    dispatch(p);
+  }
+
+  function dispatch(p) {
+    typing = add('working on it...', 'typing');
+    setDot('busy');
+    busy = true;
+    try {
+      ws.send(JSON.stringify(p));
+    } catch (e) {
+      busy = false;
+      if (typing) { typing.remove(); typing = null; }
+      queued = p;
+      note('send failed — reconnecting');
+      connect();
+    }
   }
 
   function openChat() {
@@ -757,7 +813,6 @@
       e.preventDefault();
       var v = $('#msg').value.trim();
       if (!v && !atts.length) return;
-      if (!ws || ws.readyState !== 1) { note('not connected'); return; }
       if (busy) { note('still working...'); return; }
       $('#msg').value = '';
       send(v);
