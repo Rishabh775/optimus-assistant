@@ -632,7 +632,11 @@
       var m = JSON.parse(e.data);
       if (m.type === 'hello') { /* connected; dot already on */ }
       else if (m.type === 'delta') {
-        if (m.sid !== sid) return;
+        if (m.sid !== sid) {
+          if (sid) return;              // another session's stream -> ignore
+          sid = m.sid;                  // brand-new chat: adopt it and stream
+          rowmark(sid);
+        }
         if (typing) { typing.remove(); typing = null; }
         if (!streamEl) { streamEl = add('', 'msg you'); streamEl.style.whiteSpace = 'pre-wrap'; }
         streamEl.textContent += m.text;
@@ -642,6 +646,7 @@
         if (typing) { typing.remove(); typing = null; }
         busy = false;
         setDot('on');
+        if (!sid) { sid = m.sid; rowmark(sid); }   // first reply creates it
         if (m.sid === sid) {
           if (streamEl && streamEl.textContent && m.text.indexOf(streamEl.textContent) === 0) {
             renderMd(streamEl, m.text);
@@ -651,7 +656,6 @@
           }
           streamEl = null;
         }
-        if (!sid) sid = m.sid;
         loadSessions();
       }
       else if (m.type === 'confirm') {
