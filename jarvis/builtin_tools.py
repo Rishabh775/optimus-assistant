@@ -21,6 +21,9 @@ import re
 import subprocess
 from pathlib import Path
 
+from .jobs import TOOL_FUNCS as _JOBS_TOOL_FUNCS
+from .jobs import TOOL_SCHEMAS as _JOBS_TOOL_SCHEMAS
+
 WORKSPACE = Path.home() / "jarvis" / "workspace"
 WORKSPACE.mkdir(parents=True, exist_ok=True)
 
@@ -826,3 +829,9 @@ TOOL_FUNCS = {
     "ha_call": ha_call,
     "ha_search": ha_search,
 }
+
+# ---- jobs skill (jarvis/jobs): discovery + tracker -----------------------
+# A skill contributes its own schemas/functions; keep this registration the
+# only touch-point so future skills are one import + two updates away.
+TOOL_SCHEMAS.extend(_JOBS_TOOL_SCHEMAS)
+TOOL_FUNCS.update(_JOBS_TOOL_FUNCS)

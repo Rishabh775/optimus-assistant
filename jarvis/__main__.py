@@ -439,10 +439,11 @@ def main():
         return
 
     # proactive loop: durable reminders (all long-running modes)
-    from . import scheduler, push, briefing
+    from . import scheduler, push, briefing, jobs
     scheduler.start()
     pushed = push.install()
     briefing.install()
+    jobs.install()
     print(f"reminders: scheduler up (push {'on' if pushed else 'off'})")
 
     if args.mode == "text":

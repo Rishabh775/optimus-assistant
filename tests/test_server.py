@@ -13,6 +13,9 @@ def tmp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_APP_DB", str(tmp_path / "chats.db"))
     monkeypatch.setenv("JARVIS_REMINDER_DB", str(tmp_path / "reminders.db"))
     monkeypatch.setenv("JARVIS_APP_UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("JARVIS_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("JARVIS_JOBS_PROFILE", str(tmp_path / "profile.json"))
+    monkeypatch.setenv("JARVIS_JOBS_ENABLED", "0")
     for k in ("JARVIS_NTFY_URL", "JARVIS_NTFY_TOPIC", "JARVIS_BRIEFING_TIME"):
         monkeypatch.delenv(k, raising=False)
 
@@ -325,3 +328,58 @@ def test_ws_ping_pong_keeps_connection_alive(client):
         ws.receive_json()                       # hello
         ws.send_json({"type": "ping"})
         assert ws.receive_json()["type"] == "pong"
+
+
+# ---- jobs skill endpoints ----
+
+def test_jobs_require_token(client):
+    assert client.get("/api/jobs").status_code == 403
+    assert client.get("/api/jobs/stats").status_code == 403
+    assert client.get("/api/jobs/profile").status_code == 403
+    assert client.post("/api/jobs/sweep").status_code == 403
+    assert client.patch("/api/jobs/x", json={"status": "new"}).status_code == 403
+
+
+def test_jobs_empty_and_profile(client):
+    assert client.get("/api/jobs", headers=_auth(client)).json() == {"jobs": []}
+    st = client.get("/api/jobs/stats", headers=_auth(client)).json()
+    assert st["total"] == 0 and st["by_status"]["new"] == 0
+    prof = client.get("/api/jobs/profile", headers=_auth(client)).json()
+    assert prof["configured"] is False
+
+
+def test_jobs_sweep_without_profile_is_400(client):
+    r = client.post("/api/jobs/sweep", headers=_auth(client))
+    assert r.status_code == 400
+    assert "profile" in r.json()["detail"]
+
+
+def test_jobs_patch_lifecycle(client):
+    from jarvis.jobs import tracker
+    tracker.upsert({"source": "test", "company": "Acme",
+                    "title": "Frontend Engineer", "url": "https://x/1",
+                    "score": 80})
+    jobs = client.get("/api/jobs", headers=_auth(client)).json()["jobs"]
+    assert len(jobs) == 1 and jobs[0]["status"] == "new"
+    jid = jobs[0]["id"]
+
+    r = client.patch(f"/api/jobs/{jid}", headers=_auth(client),
+                     json={"status": "shortlisted", "note": "nice fit"})
+    assert r.status_code == 200
+    assert client.get("/api/jobs?status=shortlisted",
+                      headers=_auth(client)).json()["jobs"][0]["id"] == jid
+
+    assert client.patch(f"/api/jobs/{jid}", headers=_auth(client),
+                        json={"status": "banana"}).status_code == 400
+    assert client.patch("/api/jobs/nope", headers=_auth(client),
+                        json={"status": "applied"}).status_code == 404
+
+
+def test_jobs_sweep_endpoint_calls_skill(client, monkeypatch):
+    import jarvis.jobs as jobs_skill
+    monkeypatch.setattr(jobs_skill, "sweep",
+                        lambda: {"ok": True, "found": 3, "inserted": 2,
+                                 "digest": "x"})
+    r = client.post("/api/jobs/sweep", headers=_auth(client))
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "found": 3, "inserted": 2}

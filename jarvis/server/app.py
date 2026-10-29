@@ -18,6 +18,11 @@ Agent pipeline to a phone (PWA) over the tailnet / LAN:
     POST /api/briefing            composed daily briefing (sync in pool)
     POST /api/upload              multipart file (photo/doc) -> saved path
     POST /api/transcribe          multipart audio (voice note) -> text (STT)
+    GET  /api/jobs                tracked jobs (optional ?status=)
+    GET  /api/jobs/stats          counts per status
+    GET  /api/jobs/profile        job-search profile + configured flag
+    POST /api/jobs/sweep          discover + score + digest (read-only)
+    PATCH /api/jobs/{id}          {status, note} pipeline update
 
   WS   /ws?token=     chat channel (streaming):
        {"type":"chat","session_id":...,"text":...,"attachments":[...]}
@@ -59,7 +64,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import config
-from .. import briefing, push, scheduler
+from .. import briefing, jobs, push, scheduler
 from ..agent import Agent
 from . import store
 
@@ -137,6 +142,11 @@ class _ReminderIn(BaseModel):
     repeat: str = ""
 
 
+class _JobPatchIn(BaseModel):
+    status: str
+    note: str = ""
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Soundwave", docs_url=None, redoc_url=None)
     token = ensure_token()
@@ -144,6 +154,7 @@ def create_app() -> FastAPI:
     scheduler.start()                        # reminders, same rows as CLI modes
     notify_on = push.install()               # phone push off => TTS/log-only
     briefing.install()                       # scheduled daily briefing
+    jobs.install()                           # scheduled job sweep (opt-in)
 
     # live WS connections get proactive events (fired reminders) as notes
     _live_ws: list = []                      # (loop, threadsafeSender)
@@ -250,6 +261,54 @@ def create_app() -> FastAPI:
         # plain def -> FastAPI runs it in the worker pool (IMAP can be slow)
         _bearer(authorization)
         return {"title": "Briefing", "text": briefing.build()}
+
+    # ---- jobs skill (discovery + tracker; nothing is submitted here) ----
+
+    @app.get("/api/jobs")
+    def jobs_list(status: str = "", limit: int = 50,
+                  authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        if status and status not in jobs.tracker.STATUSES:
+            raise HTTPException(status_code=400,
+                                detail=f"bad status {status!r}")
+        rows = jobs.tracker.list_jobs(status=status, limit=limit)
+        keep = ("id", "source", "company", "title", "location", "url",
+                "salary", "score", "score_notes", "status", "created_at",
+                "applied_at")
+        return {"jobs": [{k: r.get(k) for k in keep} for r in rows]}
+
+    @app.get("/api/jobs/stats")
+    def jobs_stats(authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        return jobs.tracker.stats()
+
+    @app.get("/api/jobs/profile")
+    def jobs_profile(authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        prof = jobs.profile.load()
+        return {"configured": bool(prof.get("roles")), "profile": prof}
+
+    @app.post("/api/jobs/sweep")
+    def jobs_sweep(authorization: str | None = Header(default=None)):
+        # plain def -> worker pool: board downloads take a while
+        _bearer(authorization)
+        result = jobs.sweep()
+        if not result["ok"]:
+            raise HTTPException(status_code=400, detail=result["reason"])
+        return {"ok": True, "found": result["found"],
+                "inserted": result["inserted"]}
+
+    @app.patch("/api/jobs/{jid}")
+    def jobs_patch(jid: str, body: _JobPatchIn,
+                   authorization: str | None = Header(default=None)):
+        _bearer(authorization)
+        try:
+            ok = jobs.tracker.update_status(jid, body.status, body.note)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        if not ok:
+            raise HTTPException(status_code=404, detail="no such job")
+        return {"ok": True}
 
     @app.post("/api/upload")
     def upload_file(file: UploadFile = File(...),

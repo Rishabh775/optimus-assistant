@@ -156,10 +156,10 @@
            font-size:12px;max-width:250px}
   .attchip b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .attchip button{background:transparent;color:var(--dim);padding:0 2px;font-size:13px}
-  /* reminders sheet (proactive loop) */
-  #sheet{position:fixed;inset:0;display:none;align-items:flex-end;
+  /* reminders + jobs sheets */
+  #sheet,#jsheet{position:fixed;inset:0;display:none;align-items:flex-end;
          justify-content:center;z-index:60;background:rgba(0,0,0,.55)}
-  #sheet .panel{background:var(--panel);width:100%;max-width:540px;
+  #sheet .panel,#jsheet .panel{background:var(--panel);width:100%;max-width:540px;
                 border-radius:16px 16px 0 0;border:1px solid var(--line);
                 padding:14px;max-height:82dvh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
   .phead{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
@@ -180,6 +180,18 @@
   .rform input.wide{flex:2 1 100%}
   .rform button{border-radius:10px}
   .rhint{color:var(--dim);font-size:11px;margin-top:8px}
+  /* jobs panel */
+  .jrow{display:flex;gap:9px;align-items:flex-start;padding:10px 4px;border-bottom:1px solid var(--line)}
+  .jrow:last-child{border-bottom:0}
+  .jscore{flex:none;min-width:34px;text-align:center;padding:3px 0;border-radius:7px;
+          background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:700;color:var(--accent)}
+  .jmain{flex:1;min-width:0}
+  .jtitle{font-size:14px;font-weight:600;word-break:break-word}
+  .jtitle a{color:var(--text);text-decoration:none}
+  .jsub{color:var(--dim);font-size:11.5px;margin-top:2px}
+  .jstatus{flex:none;background:var(--panel2);color:var(--text);border:1px solid var(--line);
+           border-radius:8px;padding:6px 6px;font-size:12px}
+  #jstats{margin:2px 0 8px}
   #rail .head{gap:6px}
   .mini{background:transparent;color:var(--text);font-size:17px;padding:8px 9px}
   .mini:active{background:var(--panel2)}
@@ -206,6 +218,7 @@
     <div class="head">
       <h1>Soundwave <small>(v10)</small></h1>
       <div style="display:flex;gap:2px">
+        <button class="mini" id="jobsBtn" title="Jobs">💼</button>
         <button class="mini" id="briefBtn" title="Briefing">☀️</button>
         <button class="mini" id="remBtn" title="Reminders">⏰</button>
         <button id="newChat">+ New</button>
@@ -240,6 +253,17 @@
     </form>
   </section>
 </main>
+
+<!-- jobs sheet (discovery + tracker) -->
+<div id="jsheet">
+  <div class="panel">
+    <div class="phead"><h2>Jobs</h2><button id="jclose" type="button">✕</button></div>
+    <div id="jstats" class="rhint"></div>
+    <div id="jlist"></div>
+    <div class="rform"><button id="jsweep" type="button" style="flex:1">Scan for new roles</button></div>
+    <div class="rhint">Scan is read-only — nothing is applied to. Set roles by telling Soundwave, e.g. “set my jobs profile: frontend engineer, react, typescript, Hyderabad, 2 years”.</div>
+  </div>
+</div>
 
 <!-- reminders sheet (proactive loop) -->
 <div id="sheet">
@@ -571,6 +595,94 @@
       .then(function (res) { renderMd(el, res.text || '(empty briefing)'); scroll(); })
       .catch(function (e) { el.textContent = 'Briefing failed: ' + e.message; })
       .then(function () { busy = false; setDot('on'); loadSessions(); });
+  };
+
+  // ---- jobs sheet (discovery + tracker; read-only) ----
+  var js = $('#jsheet');
+  var JOB_STATUSES = ['new', 'shortlisted', 'drafting', 'applied',
+                      'interview', 'offer', 'rejected', 'skipped'];
+
+  function openJobs() { closeRail(); closeSheet(); js.style.display = 'flex'; loadJobs(); }
+  function closeJobs() { js.style.display = 'none'; }
+  $('#jobsBtn').onclick = openJobs;
+  $('#jclose').onclick = closeJobs;
+  js.addEventListener('click', function (e) { if (e.target === js) closeJobs(); });
+
+  function loadJobs() {
+    fetch('/api/jobs/stats', { headers: headers() })
+      .then(function (r) { return r.json(); })
+      .then(function (st) {
+        var b = st.by_status || {};
+        $('#jstats').textContent = st.total + ' tracked · ' + (b.new || 0) +
+          ' new · ' + (b.applied || 0) + ' applied · ' +
+          (b.interview || 0) + ' interview';
+      }).catch(function () {});
+
+    fetch('/api/jobs?limit=50', { headers: headers() })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var list = $('#jlist');
+        list.innerHTML = '';
+        var rows = data.jobs || [];
+        if (!rows.length) {
+          list.innerHTML = '<div class="note">no jobs yet — run a scan below</div>';
+          return;
+        }
+        rows.forEach(function (j) {
+          var row = document.createElement('div');
+          row.className = 'jrow';
+          row.innerHTML = '<span class="jscore"></span>' +
+            '<div class="jmain"><div class="jtitle"><a target="_blank" rel="noopener"></a></div>' +
+            '<div class="jsub"></div></div><select class="jstatus"></select>';
+          row.querySelector('.jscore').textContent = Math.round(j.score || 0);
+          var a = row.querySelector('.jtitle a');
+          a.textContent = j.title || '(untitled)';
+          a.href = j.url;
+          row.querySelector('.jsub').textContent =
+            (j.company || '') + (j.location ? ' · ' + j.location : '') +
+            (j.salary ? ' · ' + j.salary : '');
+          var sel = row.querySelector('.jstatus');
+          JOB_STATUSES.forEach(function (s) {
+            var o = document.createElement('option');
+            o.value = s; o.textContent = s;
+            if (s === j.status) o.selected = true;
+            sel.appendChild(o);
+          });
+          sel.onchange = function () {
+            fetch('/api/jobs/' + j.id, {
+              method: 'PATCH', headers: headers(),
+              body: JSON.stringify({ status: sel.value })
+            }).then(function (r) {
+              if (!r.ok) throw new Error('http ' + r.status);
+              loadJobs();
+            }).catch(function (e) {
+              note('status update failed: ' + e.message);
+            });
+          };
+          list.appendChild(row);
+        });
+      }).catch(function (e) {
+        $('#jlist').innerHTML = '<div class="note">failed to load jobs</div>';
+      });
+  }
+
+  $('#jsweep').onclick = function () {
+    var btn = $('#jsweep');
+    btn.disabled = true;
+    btn.textContent = 'Scanning… (10-30s)';
+    fetch('/api/jobs/sweep', { method: 'POST', headers: headers() })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+      })
+      .then(function (res) {
+        if (!res.ok) {
+          note('scan: ' + (res.j.detail || 'failed'));
+        } else {
+          note('scan: ' + res.j.inserted + ' new of ' + res.j.found + ' matched');
+        }
+        loadJobs();
+      }).catch(function (e) { note('scan failed: ' + e.message); })
+      .then(function () { btn.disabled = false; btn.textContent = 'Scan for new roles'; });
   };
 
   // ---- attachments + voice notes (works in browser and the Android shell) ----

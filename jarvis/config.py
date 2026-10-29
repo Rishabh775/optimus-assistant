@@ -103,6 +103,29 @@ DEFAULTS = {
     "JARVIS_LAT": "",
     "JARVIS_LON": "",
     "JARVIS_WEATHER_CITY": "",
+    # jobs skill: discovery/matching/tracking (application engine comes later)
+    "JARVIS_JOBS_ENABLED": "0",
+    "JARVIS_JOBS_DB": "data/jobs/jobs.db",
+    "JARVIS_JOBS_PROFILE": "data/jobs/profile.json",
+    "JARVIS_JOBS_SWEEP_TIME": "08:30",
+    "JARVIS_JOBS_DIGEST_SIZE": "10",
+    "JARVIS_JOBS_MAX_AGE_DAYS": "21",
+    # don't show weak matches in the digest (they stay in the tracker)
+    "JARVIS_JOBS_MIN_SCORE": "25",
+    # drop clearly on-site roles in another city (remote/local/unknown stay)
+    "JARVIS_JOBS_STRICT_LOCATION": "1",
+    "JARVIS_JOBS_COUNTRY": "in",
+    # public, no-auth ATS boards: "provider:company" comma-separated
+    "JARVIS_JOBS_BOARDS": (
+        "greenhouse:stripe,greenhouse:vercel,greenhouse:figma,"
+        "greenhouse:gitlab,greenhouse:reddit,greenhouse:pinterest,"
+        "greenhouse:dropbox,greenhouse:duolingo,greenhouse:brex,"
+        "greenhouse:canonical,greenhouse:elastic,greenhouse:mongodb,"
+        "ashby:linear,ashby:supabase,ashby:posthog,ashby:resend,"
+        "lever:cred"),
+    # optional Adzuna search API (free key; broad search incl. India)
+    "JARVIS_ADZUNA_APP_ID": "",
+    "JARVIS_ADZUNA_APP_KEY": "",
 }
 
 

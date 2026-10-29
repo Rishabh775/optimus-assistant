@@ -38,7 +38,7 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (34)
+## Tools (42)
 
 | Tool | What |
 |---|---|
@@ -52,6 +52,8 @@ python -m jarvis --query "..."    # one-shot
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
 | `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
 | `weather`, `daily_briefing` | Open-Meteo weather (no key, home location via `JARVIS_LAT/LON`); composite morning briefing (weather + calendar + email + reminders) also scheduled via `JARVIS_BRIEFING_TIME` |
+| `jobs_profile_get`, `jobs_profile_update` | read/update the job-search profile (roles, skills, location, experience, resume) conversationally |
+| `jobs_sweep`, `jobs_digest`, `jobs_list`, `job_update` | discover + score roles from public boards, daily digest, tracked application pipeline (read-only: nothing is submitted yet) |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
@@ -83,6 +85,29 @@ The scheduler also supports once-per-day jobs, persisted across reboots (`daily_
 - on demand: the agent has the `daily_briefing` tool for "brief me" / "how's my day"
 
 Weather uses **Open-Meteo — no API key**. Configure the home location with `JARVIS_LAT`/`JARVIS_LON` (recommended; no geocoding hop) or `JARVIS_WEATHER_CITY="Hyderabad"`; the `weather` tool accepts an explicit city too.
+
+## Job search skill (v1: discover → match → track)
+
+A jobs subsystem (`jarvis/jobs/`) that fills a shortlist and tracks the pipeline. **It never submits applications** — the apply engine (email/ATS form) is the next phase and will sit behind the same mandatory confirmation gate as other consequential actions.
+
+**Sources** (all public, no scraping of banned platforms):
+- Greenhouse / Lever / Ashby public job-board APIs for a curated company list (`JARVIS_JOBS_BOARDS="greenhouse:stripe, ashby:linear, ..."`)
+- We Work Remotely RSS + Himalayas API for remote roles
+- Adzuna search API (optional free key, covers India): `JARVIS_ADZUNA_APP_ID` / `JARVIS_ADZUNA_APP_KEY`
+
+**Never**: LinkedIn, Indeed, Naukri — their terms prohibit automated access (discovery or apply).
+
+**How it behaves**
+- `jobs_sweep` (daily at `JARVIS_JOBS_SWEEP_TIME`, default 08:30 when enabled) fetches, filters (title relevance, seniority, geo/remote restrictions, freshness, excluded companies), scores 0–100 with explainable notes, stores in `data/jobs/jobs.db`, and pushes the top `JARVIS_JOBS_DIGEST_SIZE` to the phone (ntfy + in-chat note).
+- Scoring is deterministic and free: title match, stack coverage vs your skills, location/remote fit, freshness, seniority sanity. The agent can add qualitative judgement on request.
+- The phone app has a **💼 Jobs** panel: score, company/title (opens the posting), salary, and a status dropdown (`new → shortlisted → drafting → applied → interview → offer`, plus `rejected`/`skipped`). "Scan for new roles" runs a sweep on demand. Status changes are stored with an event trail.
+- Profile lives in `data/jobs/profile.json`; set it conversationally: *"set my jobs profile: frontend engineer, react, typescript, Hyderabad, 2 years"*.
+
+**Setup**
+1. `JARVIS_JOBS_ENABLED=1` and restart.
+2. Set roles/skills/etc. via chat (or edit the JSON).
+3. Optional but recommended for India: create a free Adzuna developer key and set `JARVIS_ADZUNA_APP_ID` / `JARVIS_ADZUNA_APP_KEY`.
+4. Tap 💼 in the app → "Scan for new roles".
 
 ## Routing
 
@@ -219,6 +244,7 @@ jarvis/                      # python package
 ├── scheduler.py     # proactive loop: durable reminders + fire loop
 ├── push.py          # delivery: ntfy phone push + speaker announce
 ├── briefing.py      # daily briefing (weather/calendar/email/reminders)
+├── jobs/            # job search skill: profile, discovery, match, tracker
 ├── audio.py         # shared gain/energy/warning helpers
 ├── log.py           # leveled logging (JARVIS_LOG_LEVEL)
 ├── sounds.py        # ack/end chirps (generated, no assets)
