@@ -26,6 +26,8 @@ def _isolate(tmp_path, monkeypatch):
     old_daily = dict(scheduler._DAILY)
     scheduler._INTERVAL.clear()
     scheduler._DAILY.clear()
+    discovery._LAST_FEEDS = 0.0
+    discovery._LAST_ADZUNA = 0.0
     yield
     scheduler._INTERVAL.clear()
     scheduler._INTERVAL.update(old_int)
@@ -449,3 +451,59 @@ def test_install_registers_interval(monkeypatch):
     jobs.install()
     assert "jobs_alerts" in scheduler._INTERVAL
     assert scheduler._INTERVAL["jobs_alerts"][0] == 15 * 60
+
+
+# ------------------------------------------- request efficiency ----------
+
+class _Resp:
+    def __init__(self, body, etag=None):
+        self._body = body
+        self.headers = {"ETag": etag} if etag else {}
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_conditional_get_reuses_body_on_304(monkeypatch):
+    import urllib.error
+    monkeypatch.setattr(discovery, "_get_json", discovery._get_json)
+    discovery._CACHE.clear()
+    discovery._STATS.update(requests=0, not_modified=0, kb=0.0)
+    seen = []
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req.get_header("If-none-match"))
+        if len(seen) == 1:
+            return _Resp(b'{"a": 1}', 'W/"v1"')
+        raise urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)
+
+    monkeypatch.setattr(discovery.urllib.request, "urlopen", fake_urlopen)
+    assert discovery._get_json("https://example.test/j") == {"a": 1}
+    assert discovery._get_json("https://example.test/j") == {"a": 1}
+    assert seen[1] == 'W/"v1"'                      # sent If-None-Match
+    assert discovery.stats()["not_modified"] == 1
+    assert discovery.stats()["kb"] > 0
+
+
+def test_adzuna_polled_at_most_hourly(monkeypatch):
+    monkeypatch.setenv("JARVIS_ADZUNA_APP_ID", "id")
+    monkeypatch.setenv("JARVIS_ADZUNA_APP_KEY", "key")
+    monkeypatch.setenv("JARVIS_ADZUNA_MIN_INTERVAL_MIN", "60")
+    calls = []
+    monkeypatch.setattr(discovery, "fetch_adzuna",
+                        lambda *a, **k: calls.append(1) or [])
+    monkeypatch.setattr(discovery, "boards", lambda: [])
+    monkeypatch.setattr(discovery, "fetch_remotive", lambda *a, **k: [])
+    monkeypatch.setattr(discovery, "fetch_himalayas", lambda *a, **k: [])
+    monkeypatch.setattr(discovery, "fetch_weworkremotely", lambda *a, **k: [])
+    discovery._LAST_ADZUNA = 0
+    discovery.search_all(_prof())
+    assert len(calls) == 2                 # two role keywords, one window
+    discovery.search_all(_prof())
+    assert len(calls) == 2                 # throttled for an hour

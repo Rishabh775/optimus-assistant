@@ -15,7 +15,7 @@ in the Jobs panel. A per-run cap prevents notification storms.
 """
 from .. import config, push, scheduler
 from ..log import log as _mk_log
-from . import digest
+from . import digest, discovery
 
 log = _mk_log("jobs.alerts")
 
@@ -46,6 +46,9 @@ def sweep() -> dict:
     result = digest.sweep(notify=False)
     if not result.get("ok"):
         return {"ok": False, "reason": result.get("reason", ""), "alerted": 0}
+    st = discovery.stats()
+    log.info("alert scan: %d requests, %d unchanged, %.2f MB",
+             st["requests"], st["not_modified"], st["kb"] / 1024)
 
     fresh = [j for j in result.get("new") or [] if j["score"] >= floor]
     fresh.sort(key=lambda j: -j["score"])

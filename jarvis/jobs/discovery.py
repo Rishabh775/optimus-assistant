@@ -18,6 +18,7 @@ step behind a confirmation gate).
 import json
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -35,19 +36,71 @@ _MAX_PER_FEED = 15
 _MAX_TOTAL = 60
 _GENERIC_WORDS = {"engineer", "engineers", "developer", "developers",
                   "software", "senior", "junior", "staff", "lead", "the",
-                  "and", "for", "with", "role", "native"} 
+                  "and", "for", "with", "role", "native"}
+
+# Conditional-request cache: most boards support ETag -> a poll where
+# nothing changed costs ~0 bytes (304). Keep it in RAM (the server is a
+# long-running process); a cold start pays one full download per source.
+_CACHE = {}
+_STATS = {"requests": 0, "not_modified": 0, "kb": 0.0}
+_LAST_ADZUNA = 0.0
+_LAST_FEEDS = 0.0 
+
+
+def _fetch(url: str, timeout: float = 15.0) -> bytes:
+    """GET with ETag/Last-Modified revalidation; 304 reuses the cached body."""
+    ent = _CACHE.get(url)
+    headers = {"User-Agent": _UA}
+    if ent:
+        if ent.get("etag"):
+            headers["If-None-Match"] = ent["etag"]
+        if ent.get("last_modified"):
+            headers["If-Modified-Since"] = ent["last_modified"]
+    req = urllib.request.Request(url, headers=headers)
+    _STATS["requests"] += 1
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read()
+            _CACHE[url] = {"etag": r.headers.get("ETag"),
+                           "last_modified": r.headers.get("Last-Modified"),
+                           "body": body}
+            _STATS["kb"] += len(body) / 1024
+            return body
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and ent:
+            _STATS["not_modified"] += 1
+            return ent["body"]
+        raise
 
 
 def _get_json(url: str, timeout: float = 15.0):
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "replace"))
+    return json.loads(_fetch(url, timeout).decode("utf-8", "replace"))
 
 
 def _get_text(url: str, timeout: float = 15.0) -> str:
-    req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read().decode("utf-8", "replace")
+    return _fetch(url, timeout).decode("utf-8", "replace")
+
+
+def stats() -> dict:
+    """Bytes/requests used by the most recent search_all() call."""
+    return dict(_STATS)
+
+
+def _adzuna_due() -> bool:
+    """Adzuna's free tier is 250 calls/day; poll it at most hourly."""
+    mins = int(config.get_int("JARVIS_ADZUNA_MIN_INTERVAL_MIN") or 60)
+    return (time.time() - _LAST_ADZUNA) >= mins * 60
+
+
+def _feeds_due() -> bool:
+    """Aggregator feeds (no ETag) are polled hourly by default."""
+    mins = int(config.get_int("JARVIS_JOBS_FEEDS_INTERVAL_MIN") or 60)
+    return (time.time() - _LAST_FEEDS) >= mins * 60
+
+
+def _mark_feeds() -> None:
+    global _LAST_FEEDS
+    _LAST_FEEDS = time.time()
 
 
 def _epoch(iso: str):
@@ -408,6 +461,8 @@ def _enrich(job: dict) -> None:
 
 def search_all(prof: dict) -> list:
     """Query every configured source and return filtered, normalised jobs."""
+    global _LAST_ADZUNA
+    _STATS.update(requests=0, not_modified=0, kb=0.0)
     terms = [r for r in (prof.get("roles") or []) if r][:4]
     jobs, errors = [], []
 
@@ -420,25 +475,30 @@ def search_all(prof: dict) -> list:
             errors.append(f"{provider}:{slug}: {e}")
 
     for kw in terms[:2]:
+        if not _feeds_due():
+            break
         short = kw.split()[0] if kw.split() else kw
         try:
             jobs += fetch_remotive(short)
         except Exception as e:
             errors.append(f"remotive: {e}")
 
-    try:
-        jobs += fetch_himalayas()
-    except Exception as e:
-        errors.append(f"himalayas: {e}")
+    if _feeds_due():
+        try:
+            jobs += fetch_himalayas()
+        except Exception as e:
+            errors.append(f"himalayas: {e}")
 
-    try:
-        jobs += fetch_weworkremotely()
-    except Exception as e:
-        errors.append(f"weworkremotely: {e}")
+        try:
+            jobs += fetch_weworkremotely()
+        except Exception as e:
+            errors.append(f"weworkremotely: {e}")
+        _mark_feeds()
 
     app_id = config.get("JARVIS_ADZUNA_APP_ID")
     app_key = config.get("JARVIS_ADZUNA_APP_KEY")
-    if app_id and app_key:
+    if app_id and app_key and _adzuna_due():
+        _LAST_ADZUNA = time.time()
         country = config.get("JARVIS_JOBS_COUNTRY") or "in"
         for kw in terms[:2]:
             try:
