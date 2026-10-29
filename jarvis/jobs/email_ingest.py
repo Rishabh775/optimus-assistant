@@ -1,0 +1,188 @@
+"""Ingest job-alert emails instead of scraping the job boards.
+
+Indeed / LinkedIn / Naukri explicitly prohibit automated access, so we do
+not touch their sites. What is allowed: you create job alerts on those
+sites (a normal user feature), their emails land in your inbox, and we read
+your own mail over IMAP. That gives broad coverage -- including Indeed --
+without scraping or account risk.
+
+Flow: recent alert emails -> extract job links + titles from the HTML ->
+canonicalise/dedupe -> score against the profile+resume -> tracker.
+Location is often missing in alert emails, so those rows are flagged
+"location not stated" rather than silently trusted.
+"""
+import email as emaillib
+import html
+import re
+import time
+from datetime import datetime, timedelta
+
+from .. import config
+from ..log import log as _mk_log
+from . import match, profile, resume, tracker
+
+log = _mk_log("jobs.email")
+
+_SENDERS = ("indeed", "linkedin", "naukri", "glassdoor", "instahyre",
+            "wellfound", "hirist", "cutshort", "foundit", "iimjobs")
+_JOB_HOSTS = ("indeed.", "linkedin.com/jobs", "naukri.com", "glassdoor.",
+              "instahyre.com", "wellfound.com", "hirist.com",
+              "cutshort.io", "foundit.in", "iimjobs.com")
+_ANCHOR = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+                     re.I | re.S)
+_TAGS = re.compile(r"<[^>]+>")
+_NOISE = re.compile(r"^(new|view job|view|apply|apply now|job alert|"
+                    r"recommended|see more)\b[\s:–-]*", re.I)
+_AT_COMPANY = re.compile(r"^(.{3,90}?)\s+(?:at|@)\s+(.{2,60})$", re.I)
+
+_CACHE = {"ts": 0.0, "jobs": []}
+
+
+def _clean(text: str) -> str:
+    return " ".join(html.unescape(_TAGS.sub(" ", text or "")).split())
+
+
+def canonical_url(url: str) -> str:
+    """Normalise tracking links so the same job dedupes across emails."""
+    url = html.unescape(url or "").strip()
+    if "indeed." in url:
+        m = re.search(r"[?&]jk=([A-Za-z0-9]+)", url)
+        host = re.match(r"https?://([^/]+)", url)
+        if m and host:
+            return f"https://{host.group(1)}/viewjob?jk={m.group(1)}"
+    if "linkedin.com" in url:
+        m = re.search(r"/jobs/view/(\d+)", url)
+        if m:
+            return f"https://www.linkedin.com/jobs/view/{m.group(1)}/"
+    return url.split("?utm_")[0]
+
+
+def _is_job_link(url: str) -> bool:
+    u = (url or "").lower()
+    if not u.startswith("http"):
+        return False
+    return any(h in u for h in _JOB_HOSTS) or "/jobs/" in u or "viewjob" in u
+
+
+def _sender_label(host_url: str) -> str:
+    if "indeed" in host_url:
+        return "Indeed"
+    if "linkedin" in host_url:
+        return "LinkedIn"
+    if "naukri" in host_url:
+        return "Naukri"
+    if "glassdoor" in host_url:
+        return "Glassdoor"
+    return "Email alert"
+
+
+def parse_html(html_body: str) -> list:
+    """Extract {title, company, url} candidates from an alert email."""
+    out, seen = [], set()
+    for href, inner in _ANCHOR.findall(html_body or ""):
+        url = canonical_url(href)
+        if not _is_job_link(url) or url in seen:
+            continue
+        title = _NOISE.sub("", _clean(inner)).strip(" -–—|·")
+        if not (3 <= len(title) <= 120):
+            continue
+        company = ""
+        m = _AT_COMPANY.match(title)
+        if m:
+            title, company = m.group(1).strip(), m.group(2).strip()
+        seen.add(url)
+        out.append({"title": title, "company": company or _sender_label(url),
+                    "url": url})
+    return out
+
+
+def _recent_alert_messages(days: int = 2, limit: int = 40):
+    """IMAP: newest alert emails from known senders (PEEK, never mark read)."""
+    from ..tools.email import _imap
+    conn, user, err = _imap()
+    if err:
+        return [], err
+    found, seen_ids = [], set()
+    try:
+        conn.select("INBOX")
+        since = (datetime.now() - timedelta(days=max(1, days))) \
+            .strftime("%d-%b-%Y")
+        for sender in ("indeed", "linkedin", "naukri", "glassdoor"):
+            try:
+                typ, data = conn.search(None, f'(SINCE {since} FROM "{sender}")')
+                ids = data[0].split()[-limit:]
+            except Exception:
+                continue
+            for mid in ids:
+                typ, md = conn.fetch(mid, "(BODY.PEEK[])")
+                raw = md[0][1]
+                msg = emaillib.message_from_bytes(raw)
+                mid_key = msg.get("Message-ID") or mid
+                if mid_key in seen_ids:
+                    continue
+                seen_ids.add(mid_key)
+                body = ""
+                for part in msg.walk():
+                    if part.get_content_type() == "text/html":
+                        body += part.get_payload(decode=True).decode(
+                            "utf-8", "replace")
+                if body:
+                    found.append({"id": mid.decode(),
+                                  "subject": msg.get("Subject", ""),
+                                  "html": body})
+        conn.logout()
+    except Exception as e:
+        try:
+            conn.logout()
+        except Exception:
+            pass
+        return [], f"IMAP error: {e}"
+    return found, None
+
+
+def ingest(days: int = 2) -> dict:
+    """Read alert emails, add unseen jobs. Returns found/inserted/new rows."""
+    if not config.get_bool("JARVIS_JOBS_INGEST_EMAIL"):
+        return {"ok": False, "error": "email ingestion disabled",
+                "found": 0, "inserted": 0, "new": []}
+    messages, err = _recent_alert_messages(days=days)
+    if err:
+        return {"ok": False, "error": err, "found": 0, "inserted": 0,
+                "new": []}
+
+    prof = profile.load()
+    resume_kw = resume.keywords()
+    candidates, seen = [], set()
+    for msg in messages:
+        for job in parse_html(msg["html"]):
+            if job["url"] in seen:
+                continue
+            seen.add(job["url"])
+            candidates.append(job)
+
+    inserted = []
+    for job in candidates[:60]:
+        row = {
+            "source": "email",
+            "company": job["company"],
+            "title": job["title"],
+            "location": "",                 # alerts usually omit location
+            "url": job["url"],
+            "description": "",
+            "posted_at": time.time(),
+            "salary": "",
+            "remote": any(k in job["url"] for k in ("indeed", "linkedin")),
+        }
+        score, notes = match.score_job(row, prof, resume_kw)
+        row["score"], row["score_notes"] = score, notes
+        jid = tracker.upsert(row)
+        if jid:
+            inserted.append(jid)
+
+    new_rows = [tracker.get(j) for j in inserted]
+    new_rows = [j for j in new_rows if j]
+    if new_rows:
+        log.info("email alerts: %d messages, %d new jobs",
+                 len(messages), len(new_rows))
+    return {"ok": True, "error": "", "found": len(candidates),
+            "inserted": len(new_rows), "new": new_rows}

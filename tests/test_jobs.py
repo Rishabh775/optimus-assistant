@@ -22,6 +22,7 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_JOBS_BOARDS", "greenhouse:acme,ashby:acme2,lever:acme3")
     monkeypatch.setenv("JARVIS_ADZUNA_APP_ID", "")
     monkeypatch.setenv("JARVIS_ADZUNA_APP_KEY", "")
+    monkeypatch.setenv("JARVIS_JOBS_INGEST_EMAIL", "0")
     old_int = dict(scheduler._INTERVAL)
     old_daily = dict(scheduler._DAILY)
     scheduler._INTERVAL.clear()
@@ -507,3 +508,61 @@ def test_adzuna_polled_at_most_hourly(monkeypatch):
     assert len(calls) == 2                 # two role keywords, one window
     discovery.search_all(_prof())
     assert len(calls) == 2                 # throttled for an hour
+
+
+# ------------------------------------------- email alerts (Indeed etc.) ---
+
+def test_email_alert_html_parsing_and_canonicalization():
+    from jarvis.jobs import email_ingest as ei
+    body = """
+      <a href="https://in.indeed.com/rc/clk?jk=abc123&from=alert">
+        New: Frontend Engineer at Acme</a>
+      <a href="https://in.indeed.com/viewjob?jk=abc123&utm_source=x">
+        Frontend Engineer at Acme</a>
+      <a href="https://www.linkedin.com/comm/jobs/view/123456/?trackingId=x">
+        React Developer</a>
+      <a href="https://example.com/about">About us</a>
+    """
+    jobs = ei.parse_html(body)
+    urls = [j["url"] for j in jobs]
+    assert urls.count("https://in.indeed.com/viewjob?jk=abc123") == 1
+    assert "https://www.linkedin.com/jobs/view/123456/" in urls
+    assert all("example.com" not in u for u in urls)
+    indeed = next(j for j in jobs if "indeed" in j["url"])
+    assert indeed["title"] == "Frontend Engineer"
+    assert indeed["company"] == "Acme"
+
+
+def test_email_ingest_adds_and_dedupes(monkeypatch):
+    profile.update({"roles": ["frontend engineer"], "skills": ["react"]})
+    monkeypatch.setenv("JARVIS_JOBS_INGEST_EMAIL", "1")
+    from jarvis.jobs import email_ingest as ei
+    html = ('<a href="https://in.indeed.com/viewjob?jk=z9">'
+            'Frontend Engineer at Zeta</a>')
+    monkeypatch.setattr(ei, "_recent_alert_messages",
+                        lambda days=2, limit=40: ([{"id": "1",
+                                                    "subject": "alerts",
+                                                    "html": html}], None))
+    r = ei.ingest()
+    assert r["ok"] and r["inserted"] == 1
+    row = r["new"][0]
+    assert row["company"] == "Zeta" and "indeed.com" in row["url"]
+    assert row["score"] > 0
+    assert ei.ingest()["inserted"] == 0        # dedupe
+
+
+def test_jobs_add_url_tool():
+    out = jobs.TOOL_FUNCS["jobs_add_url"](
+        url="https://in.indeed.com/viewjob?jk=xyz",
+        title="Frontend Engineer", company="Acme")
+    assert "added #" in out
+    assert "already tracked" in jobs.TOOL_FUNCS["jobs_add_url"](
+        url="https://in.indeed.com/viewjob?jk=xyz")
+    assert "error:" in jobs.TOOL_FUNCS["jobs_add_url"](url="not-a-url")
+
+
+def test_email_tools_registered():
+    from jarvis.builtin_tools import TOOL_FUNCS, TOOL_SCHEMAS
+    names = {s["name"] for s in TOOL_SCHEMAS}
+    for n in ("jobs_ingest_email", "jobs_add_url"):
+        assert n in names and n in TOOL_FUNCS

@@ -15,11 +15,14 @@ in the Jobs panel. A per-run cap prevents notification storms.
 """
 from .. import config, push, scheduler
 from ..log import log as _mk_log
-from . import digest, discovery
+from . import digest, discovery, email_ingest
+
+import time
 
 log = _mk_log("jobs.alerts")
 
 _NOTIFIER = None
+_LAST_EMAIL = 0.0
 
 
 def set_notifier(fn) -> None:
@@ -49,6 +52,23 @@ def sweep() -> dict:
     st = discovery.stats()
     log.info("alert scan: %d requests, %d unchanged, %.2f MB",
              st["requests"], st["not_modified"], st["kb"] / 1024)
+
+    # job-alert emails (Indeed/LinkedIn/...) on their own slower cadence
+    global _LAST_EMAIL
+    if config.get_bool("JARVIS_JOBS_INGEST_EMAIL"):
+        every = max(5, config.get_int("JARVIS_JOBS_EMAIL_INTERVAL_MIN"))
+        if time.time() - _LAST_EMAIL >= every * 60:
+            _LAST_EMAIL = time.time()
+            try:
+                er = email_ingest.ingest()
+                if er.get("ok"):
+                    result["new"] = (result.get("new") or []) + er["new"]
+                    if er.get("inserted"):
+                        log.info("email alerts: %d new", er["inserted"])
+                else:
+                    log.debug("email ingest skipped: %s", er.get("error"))
+            except Exception:
+                log.exception("email ingest failed")
 
     fresh = [j for j in result.get("new") or [] if j["score"] >= floor]
     fresh.sort(key=lambda j: -j["score"])

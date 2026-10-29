@@ -7,12 +7,13 @@ Pattern for future skills:
   * never let background work take irreversible actions without a gate
 """
 from . import digest, discovery, match, profile, resume, tracker  # noqa: F401
-from . import alerts  # noqa: F401
+from . import alerts, email_ingest  # noqa: F401
 from .digest import sweep, top  # noqa: F401
 from .tools import TOOL_FUNCS, TOOL_SCHEMAS  # noqa: F401
 
-__all__ = ["alerts", "digest", "discovery", "match", "profile", "resume",
-           "tracker", "install", "sweep", "top", "TOOL_SCHEMAS", "TOOL_FUNCS"]
+__all__ = ["alerts", "digest", "discovery", "email_ingest", "match",
+           "profile", "resume", "tracker", "install", "sweep", "top",
+           "TOOL_SCHEMAS", "TOOL_FUNCS"]
 
 
 def install() -> bool:

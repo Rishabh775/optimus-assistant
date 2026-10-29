@@ -5,6 +5,9 @@ Submitting applications is NOT here yet -- it lands as job_apply behind a
 mandatory confirmation gate in the next phase, so nothing can leave the
 house until that gate exists.
 """
+import re
+import time
+
 from . import digest, profile, resume, tracker
 
 TOOL_SCHEMAS = [
@@ -37,6 +40,31 @@ TOOL_SCHEMAS = [
         "parameters": {
             "type": "object",
             "properties": {"max_chars": {"type": "integer"}},
+        },
+    },
+    {
+        "name": "jobs_ingest_email",
+        "description": ("Read job-alert emails (Indeed/LinkedIn/Naukri/"
+                        "Glassdoor alerts you created) and add their roles to "
+                        "the tracker. No scraping: uses your own inbox."),
+        "parameters": {
+            "type": "object",
+            "properties": {"days": {"type": "integer"}},
+        },
+    },
+    {
+        "name": "jobs_add_url",
+        "description": ("Add a job posting by URL (Indeed/LinkedIn/company "
+                        "page). Use when the user pastes a link they found. "
+                        "Optionally pass title and company for a better match."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string"},
+                "title": {"type": "string"},
+                "company": {"type": "string"},
+            },
+            "required": ["url"],
         },
     },
     {
@@ -128,6 +156,43 @@ def jobs_profile_update(patch: dict) -> str:
     return "profile updated\n" + profile.summary()
 
 
+def jobs_ingest_email(days: int = 2) -> str:
+    from . import email_ingest
+    r = email_ingest.ingest(days=max(1, min(int(days or 2), 14)))
+    if not r["ok"]:
+        return f"error: {r['error']}"
+    if not r["new"]:
+        return f"no new roles in alert emails ({r['found']} links seen)"
+    lines = [f"{r['inserted']} new roles from email alerts:"]
+    for j in r["new"][:10]:
+        lines.append(f"[{j['score']:.0f}] {j['company']} — {j['title']}"
+                     f"\n  {j['url']}")
+    return "\n".join(lines)
+
+
+def jobs_add_url(url: str, title: str = "", company: str = "") -> str:
+    from . import email_ingest, match
+    u = str(url or "").strip()
+    if not u.startswith(("http://", "https://")):
+        return "error: pass a full http(s) job URL"
+    u = email_ingest.canonical_url(u)
+    if not title:
+        slug = u.rstrip("/").split("/")[-1]
+        words = [w for w in re.split(r"[-_%?=&.]+", slug) if w][:8]
+        title = " ".join(words).title() or "Untitled role"
+    row = {"source": "manual", "company": company or "Unknown",
+           "title": title, "location": "", "url": u, "description": "",
+           "posted_at": time.time(), "salary": "",
+           "remote": any(k in u.lower() for k in ("indeed", "linkedin"))}
+    score, notes = match.score_job(row, profile.load(), resume.keywords())
+    row["score"], row["score_notes"] = score, notes
+    jid = tracker.upsert(row)
+    if not jid:
+        return "already tracked"
+    return (f"added #{jid} [{score:.0f}] {row['company']} — {title}\n"
+            f"  {u}\n  ({notes})")
+
+
 def jobs_sweep() -> str:
     result = digest.sweep()
     if not result["ok"]:
@@ -183,6 +248,8 @@ TOOL_FUNCS = {
     "jobs_profile_get": jobs_profile_get,
     "jobs_profile_update": jobs_profile_update,
     "jobs_resume_get": jobs_resume_get,
+    "jobs_ingest_email": jobs_ingest_email,
+    "jobs_add_url": jobs_add_url,
     "jobs_sweep": jobs_sweep,
     "jobs_digest": jobs_digest,
     "jobs_list": jobs_list,

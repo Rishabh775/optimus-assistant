@@ -120,6 +120,9 @@ DEFAULTS = {
     "JARVIS_JOBS_ALERT_INTERVAL_MIN": "20",
     "JARVIS_JOBS_ALERT_MIN_SCORE": "45",
     "JARVIS_JOBS_ALERT_MAX_PER_RUN": "4",
+    # job-alert emails (Indeed/LinkedIn/Naukri alerts) -> tracker; no scraping
+    "JARVIS_JOBS_INGEST_EMAIL": "1",
+    "JARVIS_JOBS_EMAIL_INTERVAL_MIN": "60",
     # hide remote roles whose posting never states an eligible region
     "JARVIS_JOBS_HIDE_UNCLEAR_REMOTE": "0",
     "JARVIS_JOBS_COUNTRY": "in",
