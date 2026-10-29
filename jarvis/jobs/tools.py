@@ -5,7 +5,7 @@ Submitting applications is NOT here yet -- it lands as job_apply behind a
 mandatory confirmation gate in the next phase, so nothing can leave the
 house until that gate exists.
 """
-from . import digest, profile, tracker
+from . import digest, profile, resume, tracker
 
 TOOL_SCHEMAS = [
     {
@@ -18,13 +18,25 @@ TOOL_SCHEMAS = [
         "name": "jobs_profile_update",
         "description": ("Update the job-search profile. Use when the user "
                         "describes what they're looking for: roles, skills, "
-                        "location, remote_ok, min_years, email, name, phone, "
+                        "job_locations (target cities), location, country, "
+                        "remote_ok, min_years, email, name, phone, "
                         "resume_path, exclude_companies, links. Patch is a "
                         "partial object; lists replace the old value."),
         "parameters": {
             "type": "object",
             "properties": {"patch": {"type": "object"}},
             "required": ["patch"],
+        },
+    },
+    {
+        "name": "jobs_resume_get",
+        "description": ("Read the user's resume text (from jobs profile "
+                        "resume_path). ALWAYS call this before comparing a "
+                        "job to the user, judging fit, or drafting an "
+                        "application/cover letter."),
+        "parameters": {
+            "type": "object",
+            "properties": {"max_chars": {"type": "integer"}},
         },
     },
     {
@@ -57,6 +69,18 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "jobs_job_get",
+        "description": ("Read one tracked job in full: description excerpt, "
+                        "score notes, status and history. Call this BEFORE "
+                        "assessing fit, comparing to the resume, or drafting "
+                        "an application for a specific job."),
+        "parameters": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}},
+            "required": ["id"],
+        },
+    },
+    {
         "name": "job_update",
         "description": ("Update a tracked job's status/notes. Use when the "
                         "user says they applied, got an interview, want to "
@@ -81,7 +105,19 @@ def _line(j: dict) -> str:
 
 
 def jobs_profile_get() -> str:
-    return profile.summary()
+    st = resume.ready()
+    status = (f"resume: {st['path']} ({st['chars']} chars)" if st["exists"]
+              else f"resume: NOT READABLE ({st['error']})")
+    return profile.summary() + "\n" + status
+
+
+def jobs_resume_get(max_chars: int = 6000) -> str:
+    st = resume.ready()
+    if not st["exists"]:
+        return (f"error: resume not readable ({st['error']}) — set "
+                "resume_path via jobs_profile_update")
+    body = resume.text(max_chars=max(500, min(int(max_chars or 6000), 12000)))
+    return f"resume: {st['path']} ({st['chars']} chars total)\n\n{body}"
 
 
 def jobs_profile_update(patch: dict) -> str:
@@ -116,6 +152,25 @@ def jobs_list(status: str = "", limit: int = 20) -> str:
     return "\n".join(_line(j) for j in rows)
 
 
+def jobs_job_get(id: str) -> str:
+    job = tracker.get(str(id))
+    if not job:
+        return f"error: no job #{id}"
+    desc = (job.get("description") or "").strip()
+    head = [
+        f"#{job['id']}  [{job['score']:.0f}]  {job['company']} — {job['title']}",
+        f"location: {job['location'] or 'n/a'}  salary: {job['salary'] or 'n/a'}",
+        f"status: {job['status']}  source: {job['source']}",
+        f"url: {job['url']}",
+        f"score notes: {job['score_notes'] or 'n/a'}",
+    ]
+    ev = tracker.events(job["id"], limit=6)
+    if ev:
+        head.append("history: " + "; ".join(f"{e['kind']}" for e in ev))
+    body = desc[:4000] + ("…" if len(desc) > 4000 else "")
+    return "\n".join(head) + "\n\n" + (body or "(no description stored)")
+
+
 def job_update(id: str, status: str, note: str = "") -> str:
     try:
         ok = tracker.update_status(str(id), str(status), str(note or ""))
@@ -127,8 +182,10 @@ def job_update(id: str, status: str, note: str = "") -> str:
 TOOL_FUNCS = {
     "jobs_profile_get": jobs_profile_get,
     "jobs_profile_update": jobs_profile_update,
+    "jobs_resume_get": jobs_resume_get,
     "jobs_sweep": jobs_sweep,
     "jobs_digest": jobs_digest,
     "jobs_list": jobs_list,
+    "jobs_job_get": jobs_job_get,
     "job_update": job_update,
 }

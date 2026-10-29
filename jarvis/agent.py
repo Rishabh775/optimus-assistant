@@ -47,6 +47,19 @@ def _personality() -> str:
             "Stay concise and still fully answer the question.")
 
 
+def _jobs_resume_line() -> str:
+    """Tell the model a resume is on file (without dumping its contents)."""
+    try:
+        from .jobs import resume as _resume
+        st = _resume.ready()
+        if st["exists"]:
+            return (f"Resume on file: {st['path']} ({st['chars']} chars). "
+                    "Call jobs_resume_get before fit analysis or drafting.")
+    except Exception:
+        pass
+    return ""
+
+
 def _build_system(name: str, memory_count: int) -> str:
     """Self-knowledge prompt: tell the assistant its OWN configuration so it
     can answer 'what/who are you' accurately instead of guessing."""
@@ -57,6 +70,7 @@ def _build_system(name: str, memory_count: int) -> str:
     local_on = os.getenv("JARVIS_LOCAL_OK", "0") == "1"
     wake = os.getenv("JARVIS_WAKE_WORDS", "hey_optimus").replace("_", " ")
     voice = os.getenv("JARVIS_TTS_VOICE", "en-US-AndrewMultilingualNeural")
+    resume_line = _jobs_resume_line()
     try:
         from . import facts as _facts
         nfacts = len(_facts.all_facts())
@@ -84,6 +98,19 @@ Tools available:
 - email_triage / email_list / email_read / email_send / email_unread_count: email (IMAP/SMTP)
 - calendar_list / calendar_today / calendar_add: calendar (CalDAV)
 - ha_list_entities / ha_state / ha_call / ha_search: Home Assistant REST
+- jobs_profile_get / jobs_profile_update / jobs_sweep / jobs_digest /
+  jobs_list / jobs_job_get / job_update: job search (read-only discovery
+  + tracker)
+- jobs_resume_get: read the user's resume text
+
+JOB SEARCH: the user's resume is on file. Before comparing a role to the
+user, judging fit, or drafting any application/cover letter, call
+jobs_job_get(id) for the posting text AND jobs_resume_get for the
+candidate, then ground everything in those — never invent experience.
+Target locations come from the jobs profile (job_locations, e.g.
+Bangalore) plus remote roles. Nothing is auto-submitted: applications are
+a later, confirmation-gated phase.
+{resume_line}
 
 Use tools when needed. Speak your answer aloud, so be concise.
 For durable user info ("my name is", "I prefer", "remember that", allergies, constraints), call remember_fact so it persists. Use recall_facts if asked what you know about the user.

@@ -35,7 +35,7 @@ _MAX_PER_FEED = 15
 _MAX_TOTAL = 60
 _GENERIC_WORDS = {"engineer", "engineers", "developer", "developers",
                   "software", "senior", "junior", "staff", "lead", "the",
-                  "and", "for", "with", "role"} 
+                  "and", "for", "with", "role", "native"} 
 
 
 def _get_json(url: str, timeout: float = 15.0):
@@ -267,33 +267,23 @@ _ENTRY_TITLE_RE = re.compile(
 _OFF_FIELD_RE = re.compile(
     r"\b(designer|design|recruiter|sales|marketing|accountant|writer|"
     r"customer support|support engineer)\b", re.I)
-# remote roles restricted to a region the user is not in
-_GEO_TERMS = {
-    "united states": "united states", "usa": "united states",
-    "u.s.": "united states", "us only": "united states",
-    "canada": "canada", "united kingdom": "united kingdom",
-    "uk": "united kingdom", "europe": "europe", "emea": "emea",
-    "germany": "germany", "australia": "australia",
-    "latin america": "latin america", "brazil": "brazil",
-    "singapore": "singapore", "uae": "uae", "japan": "japan",
-}
-
-
 def _geo_compatible(job: dict, prof: dict) -> bool:
-    """Drop 'Remote - United States' style roles for a non-US candidate."""
+    """Remote jobs must be open to the user's country; on-site roles are
+    handled by the target-location filter."""
     country = (prof.get("country") or "").strip().lower()
-    if not country:
+    if not country or not match.is_remote(job):
         return True
-    loc = (job.get("location") or "").lower()
-    if not loc:
+    loc = (job.get("location") or "").strip().lower()
+    if not loc or loc in ("remote", "n/a", "anywhere", "anywhere in the world"):
         return True
     if any(k in loc for k in ("worldwide", "anywhere", "global", "asia",
                               "apac", country)):
         return True
-    for term, region in _GEO_TERMS.items():
-        if term in loc and region != country:
-            return False
-    return True
+    targets = [str(t) for t in (prof.get("job_locations") or [])]
+    if targets and match.loc_matches(loc, targets):
+        return True
+    # explicitly restricted to somewhere else
+    return False
 
 
 def _want(job: dict, prof: dict) -> bool:
@@ -310,9 +300,13 @@ def _want(job: dict, prof: dict) -> bool:
     if off and not any(off.group(1).lower() in str(r).lower()
                        for r in prof.get("roles") or []):
         return False
+    need_years = match.required_years(f"{title} {job.get('description') or ''}")
+    if need_years and need_years > mine + 6:
+        return False
     if not _geo_compatible(job, prof):
         return False
 
+    # title relevance: roles/skills as whole-word tokens
     tokens = set()
     for role in prof.get("roles") or []:
         for word in re.split(r"[^a-z0-9+.#]+", str(role).lower()):
@@ -337,16 +331,20 @@ def _want(job: dict, prof: dict) -> bool:
         if (time.time() - float(job["posted_at"])) / 86400 > days:
             return False
 
-    if not prof.get("remote_ok", True):
-        city = (prof.get("location") or "").lower()
-        if city and city not in (job.get("location") or "").lower():
+    # target locations: Bangalore (etc.) or remote
+    targets = [str(t).strip().lower()
+               for t in (prof.get("job_locations") or []) if str(t).strip()]
+    if not targets and prof.get("location"):
+        targets = [str(prof["location"]).strip().lower()]
+    loc = (job.get("location") or "").strip().lower()
+    remote = match.is_remote(job)
+
+    if remote:
+        if not prof.get("remote_ok", True):
             return False
-    elif config.get_bool("JARVIS_JOBS_STRICT_LOCATION"):
-        # keep local/remote/unknown; drop clearly on-site roles elsewhere
-        city = (prof.get("location") or "").lower()
-        loc = (job.get("location") or "").strip()
-        if city and loc and loc.lower() not in ("n/a", "remote"):
-            if city not in loc.lower() and not match.is_remote(job):
+    elif targets:
+        if loc and loc not in ("n/a", "anywhere in the world"):
+            if not match.loc_matches(loc, targets):
                 return False
     return True
 

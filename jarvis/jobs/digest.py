@@ -6,7 +6,7 @@ shortlist to the phone. Applying is a separate, confirmation-gated step.
 """
 from .. import config, push
 from ..log import log as _mk_log
-from . import discovery, match, profile, tracker
+from . import discovery, match, profile, resume, tracker
 
 log = _mk_log("jobs")
 
@@ -42,9 +42,10 @@ def sweep(limit: int = None) -> dict:
                 "found": 0, "inserted": 0, "digest": ""}
 
     found = discovery.search_all(prof)
+    resume_kw = resume.keywords()
     inserted = []
     for job in found:
-        score, notes = match.score_job(job, prof)
+        score, notes = match.score_job(job, prof, resume_kw)
         job["score"], job["score_notes"] = score, notes
         jid = tracker.upsert(job)
         if jid:

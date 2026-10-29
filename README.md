@@ -52,8 +52,8 @@ python -m jarvis --query "..."    # one-shot
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
 | `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
 | `weather`, `daily_briefing` | Open-Meteo weather (no key, home location via `JARVIS_LAT/LON`); composite morning briefing (weather + calendar + email + reminders) also scheduled via `JARVIS_BRIEFING_TIME` |
-| `jobs_profile_get`, `jobs_profile_update` | read/update the job-search profile (roles, skills, location, experience, resume) conversationally |
-| `jobs_sweep`, `jobs_digest`, `jobs_list`, `job_update` | discover + score roles from public boards, daily digest, tracked application pipeline (read-only: nothing is submitted yet) |
+| `jobs_profile_get`, `jobs_profile_update`, `jobs_resume_get` | read/update the job-search profile (roles, skills, target cities, experience) and read the resume text conversationally |
+| `jobs_sweep`, `jobs_digest`, `jobs_list`, `jobs_job_get`, `job_update` | discover + score roles from public boards, daily digest, full posting text, tracked application pipeline (read-only: nothing is submitted yet) |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
@@ -99,14 +99,16 @@ A jobs subsystem (`jarvis/jobs/`) that fills a shortlist and tracks the pipeline
 
 **How it behaves**
 - `jobs_sweep` (daily at `JARVIS_JOBS_SWEEP_TIME`, default 08:30 when enabled) fetches, filters (title relevance, seniority, geo/remote restrictions, freshness, excluded companies), scores 0–100 with explainable notes, stores in `data/jobs/jobs.db`, and pushes the top `JARVIS_JOBS_DIGEST_SIZE` to the phone (ntfy + in-chat note).
-- Scoring is deterministic and free: title match, stack coverage vs your skills, location/remote fit, freshness, seniority sanity. The agent can add qualitative judgement on request.
+- **Locations**: `job_locations` in the profile (e.g. `["Bengaluru"]`, with Bangalore/Bengaluru alias handling) plus remote roles open to your `country`. On-site roles in other cities and "Remote - United States"-style geo-locked roles are dropped.
+- **Resume-aware**: `resume_path` points at a stable copy (e.g. `data/jobs/resume.pdf`, extracted locally via `pdftotext`). The matcher adds a resume-overlap bonus to each posting, and the agent prompt always notes the resume is on file — it must call `jobs_resume_get` before comparing a role or drafting anything, grounding output in the real resume (never invented experience).
+- Scoring is deterministic and free: title match, stack coverage vs your skills, resume overlap, location/remote fit, freshness, seniority sanity. The agent can add qualitative judgement on request.
 - The phone app has a **💼 Jobs** panel: score, company/title (opens the posting), salary, and a status dropdown (`new → shortlisted → drafting → applied → interview → offer`, plus `rejected`/`skipped`). "Scan for new roles" runs a sweep on demand. Status changes are stored with an event trail.
-- Profile lives in `data/jobs/profile.json`; set it conversationally: *"set my jobs profile: frontend engineer, react, typescript, Hyderabad, 2 years"*.
+- Profile lives in `data/jobs/profile.json`; set it conversationally: *"set my jobs profile: frontend engineer, React, TypeScript, Bengaluru, 2 years, resume at data/jobs/resume.pdf"*.
 
 **Setup**
 1. `JARVIS_JOBS_ENABLED=1` and restart.
-2. Set roles/skills/etc. via chat (or edit the JSON).
-3. Optional but recommended for India: create a free Adzuna developer key and set `JARVIS_ADZUNA_APP_ID` / `JARVIS_ADZUNA_APP_KEY`.
+2. Set roles/skills/locations/resume via chat (or edit the JSON).
+3. Optional but recommended for India: create a free Adzuna developer key and set `JARVIS_ADZUNA_APP_ID` / `JARVIS_ADZUNA_APP_KEY`. The public ATS boards skew US/Europe; the key is what unlocks Bangalore-local listings.
 4. Tap 💼 in the app → "Scan for new roles".
 
 ## Routing

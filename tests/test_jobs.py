@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from jarvis import jobs
-from jarvis.jobs import digest, discovery, match, profile, tracker
+from jarvis.jobs import digest, discovery, match, profile, resume, tracker
 
 
 def _iso(days_ago: float = 1) -> str:
@@ -261,3 +261,71 @@ def test_tools_registered_and_work(monkeypatch):
     assert "shortlisted" in TOOL_FUNCS["jobs_list"]()
     assert "error:" in TOOL_FUNCS["job_update"](id="nope", status="applied")
     assert "no new roles yet" in TOOL_FUNCS["jobs_digest"]()
+
+
+# ------------------------------------------------ Bangalore / remote ------
+
+
+def test_target_locations_bangalore_or_remote():
+    p = _prof(job_locations=["Bengaluru"], location="Hyderabad",
+              country="India")
+    base = {"title": "Frontend Engineer", "company": "X", "description": "react",
+            "source": "t", "url": "https://u", "posted_at": None}
+    assert discovery._want({**base, "location": "Bangalore, India"}, p)
+    assert discovery._want({**base, "location": "Bengaluru, India"}, p)  # alias
+    assert discovery._want({**base, "location": "Remote - India"}, p)
+    assert not discovery._want({**base, "location": "Pune, India"}, p)
+    assert not discovery._want({**base, "location": "Remote - United States"}, p)
+
+
+def test_profile_job_locations_normalized():
+    p = profile.update({"job_locations": ["Bengaluru", "bengaluru", "Remote"]})
+    assert p["job_locations"] == ["Bengaluru", "Remote"]
+
+
+# ------------------------------------------------------------- resume -----
+
+
+def test_resume_text_ready_and_keywords(tmp_path):
+    f = tmp_path / "cv.txt"
+    f.write_text("Rishabh Singh\nReact TypeScript GraphQL Playwright\n")
+    profile.update({"resume_path": str(f)})
+    assert "Rishabh" in resume.text()
+    st = resume.ready()
+    assert st["exists"] and st["chars"] > 0
+    assert {"react", "typescript", "graphql"} <= resume.keywords()
+
+
+def test_resume_missing_is_reported(tmp_path):
+    profile.update({"resume_path": str(tmp_path / "nope.pdf")})
+    st = resume.ready()
+    assert st["exists"] is False and "not found" in st["error"]
+    out = jobs.TOOL_FUNCS["jobs_resume_get"]()
+    assert out.startswith("error:")
+
+
+def test_resume_bonus_affects_score():
+    job = {"title": "Frontend Engineer", "location": "Remote",
+           "description": "react typescript graphql playwright jest",
+           "posted_at": None}
+    base, _ = match.score_job(job, _prof())
+    boosted, notes = match.score_job(
+        job, _prof(), {"react", "typescript", "graphql", "playwright", "jest"})
+    assert boosted > base and "resume fit" in notes
+
+
+def test_agent_prompt_mentions_resume(tmp_path):
+    f = tmp_path / "cv.txt"
+    f.write_text("react typescript")
+    profile.update({"resume_path": str(f)})
+    from jarvis.agent import _build_system
+    assert "Resume on file" in _build_system("Test", 0)
+
+
+def test_jobs_job_get_includes_description_and_history():
+    jid = tracker.upsert(_job(description="We build React design systems."))
+    tracker.update_status(jid, "shortlisted")
+    out = jobs.TOOL_FUNCS["jobs_job_get"](id=jid)
+    assert "Frontend Engineer" in out and "React design systems" in out
+    assert "status: shortlisted" in out and "status:shortlisted" in out
+    assert jobs.TOOL_FUNCS["jobs_job_get"](id="nope").startswith("error:")

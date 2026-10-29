@@ -286,7 +286,8 @@ def create_app() -> FastAPI:
     def jobs_profile(authorization: str | None = Header(default=None)):
         _bearer(authorization)
         prof = jobs.profile.load()
-        return {"configured": bool(prof.get("roles")), "profile": prof}
+        return {"configured": bool(prof.get("roles")), "profile": prof,
+                "resume": jobs.resume.ready()}
 
     @app.post("/api/jobs/sweep")
     def jobs_sweep(authorization: str | None = Header(default=None)):

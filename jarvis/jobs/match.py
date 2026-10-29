@@ -15,6 +15,23 @@ _NEGATIVE_TITLES = (("principal", 15), ("staff", 13), ("head of", 15),
                     ("senior", 10))
 _JUNIOR_TITLES = (("intern", 20), ("trainee", 15), ("fresher", 15),
                   ("junior", 6))
+_CITY_ALIASES = {
+    "bengaluru": "bangalore", "bangalore": "bengaluru",
+    "gurugram": "gurgaon", "gurgaon": "gurugram",
+    "mumbai": "bombay", "bombay": "mumbai",
+}
+
+
+def loc_matches(text: str, targets: list) -> bool:
+    text = (text or "").lower()
+    for t in targets:
+        t = str(t).strip().lower()
+        if t and t in text:
+            return True
+        alias = _CITY_ALIASES.get(t)
+        if alias and alias in text:
+            return True
+    return False
 
 
 def is_remote(job: dict) -> bool:
@@ -34,7 +51,8 @@ def required_years(text: str):
     return int(m.group(1)) if m else None
 
 
-def score_job(job: dict, prof: dict) -> tuple[float, str]:
+def score_job(job: dict, prof: dict,
+              resume_keywords: set = None) -> tuple[float, str]:
     """Return (0-100 score, notes). Pure function, easy to test."""
     title = (job.get("title") or "").lower()
     text = f"{title} {job.get('description') or ''}".lower()
@@ -66,20 +84,31 @@ def score_job(job: dict, prof: dict) -> tuple[float, str]:
     else:
         score += 15
 
-    # 3) location fit (15)
+    # 3) location fit (15): target cities (job_locations) or remote
     remote = is_remote(job)
-    city = (prof.get("location") or "").lower()
+    targets = [str(t).strip().lower()
+               for t in (prof.get("job_locations") or []) if str(t).strip()]
+    if not targets and prof.get("location"):
+        targets = [str(prof["location"]).strip().lower()]
+    loc_text = f"{job.get('location', '')} {job.get('description', '')}"
     if remote and prof.get("remote_ok", True):
         score += 15
         notes.append("remote")
-    elif city and city in f"{job.get('location', '')} {job.get('description', '')}".lower():
+    elif targets and loc_matches(loc_text, targets):
         score += 15
-        notes.append("local")
-    elif not city:
+        notes.append("target city")
+    elif not targets:
         score += 7
     elif not prof.get("remote_ok", True):
         score -= 20
-        notes.append("not local/remote")
+        notes.append("not in target location")
+
+    # 4) resume overlap bonus (10): distinctive resume terms present in the ad
+    if resume_keywords:
+        hits = [k for k in resume_keywords if k in text]
+        if hits:
+            score += min(10.0, 10.0 * len(hits) / 6)
+            notes.append(f"resume fit {len(hits)}")
 
     # 4) freshness (10)
     posted = job.get("posted_at")

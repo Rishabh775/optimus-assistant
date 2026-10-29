@@ -29,6 +29,7 @@ DEFAULTS = {
     "email": "",
     "phone": "",
     "location": "",
+    "job_locations": [],
     "country": "",
     "remote_ok": True,
     "roles": [],
@@ -39,7 +40,7 @@ DEFAULTS = {
     "links": {"linkedin": "", "github": "", "portfolio": ""},
     "ai_disclosure": True,
 }
-_LIST_FIELDS = ("roles", "skills", "exclude_companies")
+_LIST_FIELDS = ("roles", "skills", "exclude_companies", "job_locations")
 _UPDATABLE = set(DEFAULTS)
 
 
@@ -136,9 +137,10 @@ def summary() -> str:
         f"name: {p['name'] or '(not set)'}  email: {p['email'] or '(not set)'}",
         f"location: {p['location'] or '(not set)'}"
         f"  country: {p['country'] or '(not set)'}"
-        f"  remote ok: {p['remote_ok']}",        "roles: " + (", ".join(p["roles"]) or "(not set)"),
+        f"  remote ok: {p['remote_ok']}",
+        "job locations: " + (", ".join(p["job_locations"]) or
+                             ("(remote only)" if p["remote_ok"] else "(not set)")),        "roles: " + (", ".join(p["roles"]) or "(not set)"),
         "skills: " + (", ".join(p["skills"]) or "(not set)"),
-        f"experience: {p['min_years']}y  resume: {p['resume_path'] or '(not set)'}",
-        f"ai disclosure: {p['ai_disclosure']}",
+        f"experience: {p['min_years']}y  resume: {p['resume_path'] or '(not set)'}",        f"ai disclosure: {p['ai_disclosure']}",
     ]
     return "\n".join(lines)
