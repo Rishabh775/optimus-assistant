@@ -32,8 +32,13 @@ _ANCHOR = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
                      re.I | re.S)
 _TAGS = re.compile(r"<[^>]+>")
 _NOISE = re.compile(r"^(new|view job|view|apply|apply now|job alert|"
-                    r"recommended|see more)\b[\s:–-]*", re.I)
+                    r"recommended|see more|manage alerts?|see all jobs?|"
+                    r"view all|your job alert|jobs in|unsubscribe|settings|"
+                    r"save search|edit alert|create alert|alert preferences|"
+                    r"similar jobs|company page|back to results)\b", re.I)
 _AT_COMPANY = re.compile(r"^(.{3,90}?)\s+(?:at|@)\s+(.{2,60})$", re.I)
+_COMPANY_LOC = re.compile(
+    r"^([A-Z][\w&.,'’()\- ]{1,48}?)\s*[·•|]\s*([A-Za-z .(),\-]{2,48})")
 
 _CACHE = {"ts": 0.0, "jobs": []}
 
@@ -58,10 +63,22 @@ def canonical_url(url: str) -> str:
 
 
 def _is_job_link(url: str) -> bool:
+    """Only real job pages, never alert/search/navigation links."""
     u = (url or "").lower()
     if not u.startswith("http"):
         return False
-    return any(h in u for h in _JOB_HOSTS) or "/jobs/" in u or "viewjob" in u
+    if "indeed." in u:
+        return "viewjob" in u or "jk=" in u
+    if "linkedin.com" in u:
+        return bool(re.search(r"/jobs/view/\d+", u))
+    if "naukri.com" in u:
+        return "job-listings" in u or "/jobs/" in u
+    if "glassdoor." in u:
+        return "job-listing" in u or "/job/" in u
+    if any(k in u for k in ("instahyre", "wellfound", "hirist", "cutshort",
+                            "foundit", "iimjobs")):
+        return any(k in u for k in ("/job/", "/jobs/", "/job-detail", "/apply"))
+    return "/jobs/" in u or "/job/" in u
 
 
 def _sender_label(host_url: str) -> str:
@@ -77,21 +94,30 @@ def _sender_label(host_url: str) -> str:
 
 
 def parse_html(html_body: str) -> list:
-    """Extract {title, company, url} candidates from an alert email."""
+    """Extract {title, company, location, url} candidates from an alert email."""
     out, seen = [], set()
-    for href, inner in _ANCHOR.findall(html_body or ""):
+    for m in _ANCHOR.finditer(html_body or ""):
+        href, inner = m.group(1), m.group(2)
         url = canonical_url(href)
         if not _is_job_link(url) or url in seen:
             continue
-        title = _NOISE.sub("", _clean(inner)).strip(" -–—|·")
-        if not (3 <= len(title) <= 120):
+        title = _NOISE.sub("", _clean(inner)).strip(" -–—|·:")
+        if not (3 <= len(title) <= 120) or _NOISE.match(title):
             continue
-        company = ""
-        m = _AT_COMPANY.match(title)
-        if m:
-            title, company = m.group(1).strip(), m.group(2).strip()
+        company, location = "", ""
+        at = _AT_COMPANY.match(title)
+        if at:
+            title, company = at.group(1).strip(), at.group(2).strip()
+        else:
+            # alert emails usually print "Company · City" right after the link
+            near = _clean(html_body[m.end():m.end() + 320])
+            cm = _COMPANY_LOC.match(near)
+            if cm:
+                company, location = cm.group(1).strip(), cm.group(2).strip()
         seen.add(url)
-        out.append({"title": title, "company": company or _sender_label(url),
+        out.append({"title": title,
+                    "company": company or f"{_sender_label(url)} alert",
+                    "location": location,
                     "url": url})
     return out
 
@@ -166,7 +192,7 @@ def ingest(days: int = 2) -> dict:
             "source": "email",
             "company": job["company"],
             "title": job["title"],
-            "location": "",                 # alerts usually omit location
+            "location": job.get("location") or "",
             "url": job["url"],
             "description": "",
             "posted_at": time.time(),

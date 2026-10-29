@@ -13,7 +13,13 @@ from datetime import datetime, timedelta
 
 
 def _creds():
-    return (os.getenv("JARVIS_EMAIL_USER"), os.getenv("JARVIS_EMAIL_PASS"))
+    user = (os.getenv("JARVIS_EMAIL_USER") or "").strip()
+    pw = (os.getenv("JARVIS_EMAIL_PASS") or "").strip()
+    host = (os.getenv("JARVIS_EMAIL_IMAP") or "").lower()
+    # Gmail shows app passwords as "abcd efgh ijkl mnop"; login needs 16 chars.
+    if "gmail" in host and len(pw.replace(" ", "")) == 16:
+        pw = pw.replace(" ", "")
+    return (user, pw)
 
 
 def _imap():

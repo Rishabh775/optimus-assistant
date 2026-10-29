@@ -531,6 +531,20 @@ def test_email_alert_html_parsing_and_canonicalization():
     indeed = next(j for j in jobs if "indeed" in j["url"])
     assert indeed["title"] == "Frontend Engineer"
     assert indeed["company"] == "Acme"
+    li = next(j for j in jobs if "linkedin" in j["url"])
+    assert li["company"] == "LinkedIn alert"
+
+
+def test_email_noise_and_non_job_links_are_filtered():
+    from jarvis.jobs import email_ingest as ei
+    body = """
+      <a href="https://www.linkedin.com/jobs/alerts/">Manage alerts</a>
+      <a href="https://www.linkedin.com/jobs/view/999/">See all jobs</a>
+      <a href="https://www.linkedin.com/jobs/search/?keywords=frontend">Jobs in Bengaluru</a>
+      <a href="https://in.indeed.com/viewjob?jk=good1">React Developer</a>
+    """
+    jobs = ei.parse_html(body)
+    assert [j["title"] for j in jobs] == ["React Developer"]
 
 
 def test_email_ingest_adds_and_dedupes(monkeypatch):
