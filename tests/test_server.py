@@ -16,6 +16,7 @@ def tmp_db(monkeypatch, tmp_path):
     monkeypatch.setenv("JARVIS_JOBS_DB", str(tmp_path / "jobs.db"))
     monkeypatch.setenv("JARVIS_JOBS_PROFILE", str(tmp_path / "profile.json"))
     monkeypatch.setenv("JARVIS_JOBS_ENABLED", "0")
+    monkeypatch.setenv("JARVIS_JOBS_ALERTS", "0")
     for k in ("JARVIS_NTFY_URL", "JARVIS_NTFY_TOPIC", "JARVIS_BRIEFING_TIME"):
         monkeypatch.delenv(k, raising=False)
 

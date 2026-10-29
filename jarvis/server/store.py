@@ -184,3 +184,21 @@ def delete_session(sid: str) -> bool:
     finally:
         conn.close()
     return n > 0
+
+
+def prune_empty_sessions(max_age_seconds: int = 3600) -> int:
+    """Drop sessions that were created but never used (no messages).
+
+    These come from opening "+ New" and walking away; they clutter the rail
+    forever otherwise. Only sessions older than an hour are removed."""
+    cutoff = time.time() - max_age_seconds
+    conn = _connect()
+    try:
+        with conn:
+            n = conn.execute(
+                "DELETE FROM sessions WHERE created_at < ? AND id NOT IN"
+                " (SELECT DISTINCT session_id FROM messages)", (cutoff,)
+            ).rowcount
+    finally:
+        conn.close()
+    return n

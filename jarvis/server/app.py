@@ -151,23 +151,31 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Soundwave", docs_url=None, redoc_url=None)
     token = ensure_token()
     store.init()
+    try:
+        store.prune_empty_sessions()
+    except Exception:
+        pass
     scheduler.start()                        # reminders, same rows as CLI modes
     notify_on = push.install()               # phone push off => TTS/log-only
     briefing.install()                       # scheduled daily briefing
     jobs.install()                           # scheduled job sweep (opt-in)
 
-    # live WS connections get proactive events (fired reminders) as notes
+    # live WS connections get proactive events (fired reminders, job alerts)
     _live_ws: list = []                      # (loop, threadsafeSender)
 
-    def _proactive_note(r: dict) -> None:
-        mark = "Missed reminder" if r.get("missed") else "Reminder"
+    def _broadcast(text: str) -> None:
         for loop, send in list(_live_ws):
             try:
-                send({"type": "note", "text": f"{mark}: {r['message']}"})
+                send({"type": "note", "text": text})
             except Exception:
                 pass
 
+    def _proactive_note(r: dict) -> None:
+        mark = "Missed reminder" if r.get("missed") else "Reminder"
+        _broadcast(f"{mark}: {r['message']}")
+
     scheduler.add_listener(_proactive_note)
+    jobs.alerts.set_notifier(_broadcast)
 
     def _token_ok(candidate: str | None) -> bool:
         return bool(candidate) and secrets.compare_digest(candidate, token)

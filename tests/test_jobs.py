@@ -15,12 +15,22 @@ def _iso(days_ago: float = 1) -> str:
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
+    from jarvis import scheduler
     monkeypatch.setenv("JARVIS_JOBS_DB", str(tmp_path / "jobs.db"))
     monkeypatch.setenv("JARVIS_JOBS_PROFILE", str(tmp_path / "profile.json"))
     monkeypatch.setenv("JARVIS_JOBS_ENABLED", "0")
     monkeypatch.setenv("JARVIS_JOBS_BOARDS", "greenhouse:acme,ashby:acme2,lever:acme3")
     monkeypatch.setenv("JARVIS_ADZUNA_APP_ID", "")
     monkeypatch.setenv("JARVIS_ADZUNA_APP_KEY", "")
+    old_int = dict(scheduler._INTERVAL)
+    old_daily = dict(scheduler._DAILY)
+    scheduler._INTERVAL.clear()
+    scheduler._DAILY.clear()
+    yield
+    scheduler._INTERVAL.clear()
+    scheduler._INTERVAL.update(old_int)
+    scheduler._DAILY.clear()
+    scheduler._DAILY.update(old_daily)
 
 
 # ------------------------------------------------------------- profile ---
@@ -378,3 +388,64 @@ def test_remote_scope_modes(monkeypatch):
 
     monkeypatch.setenv("JARVIS_JOBS_HIDE_UNCLEAR_REMOTE", "1")
     assert discovery._want({**base, "description": "A friendly team."}, p) is False
+
+
+# ------------------------------------------------- fast alerts -----------
+
+def test_alerts_push_new_above_threshold(monkeypatch):
+    import jarvis.jobs.alerts as alerts
+    monkeypatch.setenv("JARVIS_JOBS_ALERTS", "1")
+    monkeypatch.setenv("JARVIS_JOBS_ALERT_MIN_SCORE", "40")
+    monkeypatch.setenv("JARVIS_JOBS_ALERT_MAX_PER_RUN", "1")
+    pushed, notes = [], []
+    monkeypatch.setattr(alerts.push, "send",
+                        lambda t, m: pushed.append((t, m)) or True)
+    alerts.set_notifier(lambda text: notes.append(text))
+    monkeypatch.setattr(alerts.digest, "sweep", lambda notify=True: {
+        "ok": True, "found": 2, "inserted": 2,
+        "new": [
+            {"company": "Acme", "title": "Frontend Engineer",
+             "location": "Remote", "score": 80,
+             "score_notes": "title match", "url": "https://a/1"},
+            {"company": "Low", "title": "Frontend Developer",
+             "location": "Remote", "score": 30,
+             "score_notes": "weak", "url": "https://a/2"},
+        ]})
+    res = alerts.sweep()
+    assert res["alerted"] == 1
+    assert pushed and "New role: Acme" in pushed[0][0]
+    assert notes and "https://a/1" in notes[0]
+
+
+def test_alerts_disabled_and_batching(monkeypatch):
+    import jarvis.jobs.alerts as alerts
+    monkeypatch.setenv("JARVIS_JOBS_ALERTS", "0")
+    assert alerts.sweep()["ok"] is False
+
+    monkeypatch.setenv("JARVIS_JOBS_ALERTS", "1")
+    monkeypatch.setenv("JARVIS_JOBS_ALERT_MIN_SCORE", "0")
+    monkeypatch.setenv("JARVIS_JOBS_ALERT_MAX_PER_RUN", "1")
+    pushed = []
+    monkeypatch.setattr(alerts.push, "send",
+                        lambda t, m: pushed.append((t, m)) or True)
+    alerts.set_notifier(None)
+    monkeypatch.setattr(alerts.digest, "sweep", lambda notify=True: {
+        "ok": True, "found": 3, "inserted": 3,
+        "new": [{"company": c, "title": "Frontend Engineer",
+                 "location": "Remote", "score": 90,
+                 "score_notes": "", "url": f"https://a/{c}"}
+                for c in ("A", "B", "C")]})
+    res = alerts.sweep()
+    assert res["alerted"] == 1
+    assert len(pushed) == 2                     # 1 job + "more" summary
+    assert "More new roles" in pushed[1][0]
+
+
+def test_install_registers_interval(monkeypatch):
+    from jarvis import scheduler
+    monkeypatch.setenv("JARVIS_JOBS_ALERTS", "1")
+    monkeypatch.setenv("JARVIS_JOBS_ALERT_INTERVAL_MIN", "15")
+    monkeypatch.setenv("JARVIS_JOBS_ENABLED", "1")
+    jobs.install()
+    assert "jobs_alerts" in scheduler._INTERVAL
+    assert scheduler._INTERVAL["jobs_alerts"][0] == 15 * 60

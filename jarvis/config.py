@@ -115,6 +115,11 @@ DEFAULTS = {
     # remote scope: "any" = show every remote role (geo-restricted ones are
     # labeled), "eligible" = hide roles restricted to other regions
     "JARVIS_JOBS_REMOTE_SCOPE": "any",
+    # fast alerts: poll every N minutes and push new roles immediately
+    "JARVIS_JOBS_ALERTS": "1",
+    "JARVIS_JOBS_ALERT_INTERVAL_MIN": "20",
+    "JARVIS_JOBS_ALERT_MIN_SCORE": "45",
+    "JARVIS_JOBS_ALERT_MAX_PER_RUN": "4",
     # hide remote roles whose posting never states an eligible region
     "JARVIS_JOBS_HIDE_UNCLEAR_REMOTE": "0",
     "JARVIS_JOBS_COUNTRY": "in",

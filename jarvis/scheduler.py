@@ -51,9 +51,15 @@ CREATE TABLE IF NOT EXISTS daily_runs (
     last_date TEXT NOT NULL,
     last_ts   REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS interval_runs (
+    name    TEXT PRIMARY KEY,
+    last_ts REAL NOT NULL
+);
 """
 _DAILY = {}
 _DAILY_LOCK = threading.Lock()
+_INTERVAL = {}
+_INTERVAL_LOCK = threading.Lock()
 _HHMM_RE = re.compile(r"(\d{1,2}):(\d{2})")
 
 
@@ -65,6 +71,18 @@ def add_daily(name: str, at: str, fn) -> bool:
         raise ValueError(f"bad daily time {at!r} -- use 'HH:MM'")
     with _DAILY_LOCK:
         _DAILY[name] = (int(m.group(1)), int(m.group(2)), fn)
+    return True
+
+
+def add_interval(name: str, seconds: int, fn) -> bool:
+    """Register a repeating job every N seconds (minimum 60).
+
+    The run timestamp lives in SQLite, so with the CLI and phone-app server
+    both running, only one of them executes each interval window."""
+    if int(seconds) < 60:
+        raise ValueError("interval must be >= 60 seconds")
+    with _INTERVAL_LOCK:
+        _INTERVAL[name] = (int(seconds), fn)
     return True
 
 
@@ -291,6 +309,7 @@ def _tick(now: float = None) -> list:
                     _deliver(d)
                     fired.append(d)
         _sweep_daily(now)
+        _sweep_intervals(now)
     finally:
         conn.close()
     return fired
@@ -329,6 +348,35 @@ def _sweep_daily(now: float) -> None:
             fn()
         except Exception:
             log.exception("daily job %s failed", name)
+
+
+def _claim_interval(name: str, now: float, seconds: int) -> bool:
+    """Atomically claim this interval window (cross-process)."""
+    conn = _connect()
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT last_ts FROM interval_runs WHERE name=?",
+                (name,)).fetchone()
+            if row and now - row[0] < seconds:
+                return False
+            conn.execute(
+                "INSERT INTO interval_runs (name, last_ts) VALUES (?,?)"
+                " ON CONFLICT(name) DO UPDATE SET last_ts=?",
+                (name, now, now))
+        return True
+    finally:
+        conn.close()
+
+
+def _sweep_intervals(now: float) -> None:
+    for name, (seconds, fn) in list(_INTERVAL.items()):
+        if not _claim_interval(name, now, seconds):
+            continue
+        try:
+            fn()
+        except Exception:
+            log.exception("interval job %s failed", name)
 
 
 # -------------------------------------------------------------- the loop --

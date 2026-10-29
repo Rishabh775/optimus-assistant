@@ -13,12 +13,18 @@ from jarvis import scheduler
 
 @pytest.fixture(autouse=True)
 def _sd(tmp_path, monkeypatch):
-    """Isolate scheduler state: tmp DB, no inherited listeners."""
+    """Isolate scheduler state: tmp DB, no inherited listeners/jobs."""
     monkeypatch.setenv("JARVIS_REMINDER_DB", str(tmp_path / "reminders.db"))
     old = list(scheduler._LISTENERS)
+    old_daily = dict(scheduler._DAILY)
     scheduler._LISTENERS.clear()
+    scheduler._DAILY.clear()
+    scheduler._INTERVAL.clear()
     yield
     scheduler._LISTENERS[:] = old
+    scheduler._DAILY.clear()
+    scheduler._DAILY.update(old_daily)
+    scheduler._INTERVAL.clear()
 
 
 @pytest.fixture
@@ -179,3 +185,22 @@ def test_reminders_not_confirm_gated():
     from jarvis.builtin_tools import needs_confirmation
     assert needs_confirmation("remind_me", {}) is None
     assert needs_confirmation("cancel_reminder", {}) is None
+
+
+# ------------------------------------------------- interval jobs ---------
+
+def test_interval_job_runs_once_per_window():
+    runs = []
+    scheduler.add_interval("poll", 60, lambda: runs.append(1))
+    now = 1_800_000_000.0
+    scheduler._tick(now)          # first window
+    assert len(runs) == 1
+    scheduler._tick(now + 10)     # same window -> no rerun
+    assert len(runs) == 1
+    scheduler._tick(now + 61)     # next window
+    assert len(runs) == 2
+
+
+def test_interval_rejects_tiny_seconds():
+    with pytest.raises(ValueError):
+        scheduler.add_interval("x", 5, lambda: None)

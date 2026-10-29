@@ -32,14 +32,14 @@ def top(limit: int = None, status: str = "new") -> list:
     return tracker.list_jobs(status=status, limit=n, min_score=floor)
 
 
-def sweep(limit: int = None) -> dict:
+def sweep(limit: int = None, notify: bool = True) -> dict:
     prof = profile.load()
     if not prof.get("roles"):
         return {"ok": False,
                 "reason": ("jobs profile has no target roles — ask Soundwave "
                            "to set them (e.g. \"set my jobs profile: frontend "
                            "engineer, react, typescript, Hyderabad, 2 years\")"),
-                "found": 0, "inserted": 0, "digest": ""}
+                "found": 0, "inserted": 0, "digest": "", "new": []}
 
     found = discovery.search_all(prof)
     resume_kw = resume.keywords()
@@ -51,14 +51,16 @@ def sweep(limit: int = None) -> dict:
         if jid:
             inserted.append(jid)
 
+    new_rows = [tracker.get(jid) for jid in inserted]
+    new_rows = [j for j in new_rows if j]
     rows = top(limit)
     text = render(rows, f"Job digest — {len(inserted)} new of {len(found)} matched")
-    if inserted and text:
+    if notify and inserted and text:
         push.send("Job digest", text)
         log.info("job sweep: %d found, %d new", len(found), len(inserted))
 
     return {"ok": True, "found": len(found), "inserted": len(inserted),
-            "digest": text}
+            "digest": text, "new": new_rows}
 
 
 def install() -> bool:
@@ -74,3 +76,9 @@ def install() -> bool:
         return False
     log.info("jobs sweep scheduled daily at %s", at)
     return True
+
+
+def install_alerts() -> bool:
+    """Register the fast alert poller (JARVIS_JOBS_ALERTS=1)."""
+    from . import alerts
+    return alerts.install()

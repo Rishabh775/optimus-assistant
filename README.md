@@ -99,6 +99,7 @@ A jobs subsystem (`jarvis/jobs/`) that fills a shortlist and tracks the pipeline
 
 **How it behaves**
 - `jobs_sweep` (daily at `JARVIS_JOBS_SWEEP_TIME`, default 08:30 when enabled) fetches, filters (title relevance, seniority, geo/remote restrictions, freshness, excluded companies), scores 0–100 with explainable notes, stores in `data/jobs/jobs.db`, and pushes the top `JARVIS_JOBS_DIGEST_SIZE` to the phone (ntfy + in-chat note).
+- **Fast alerts**: while `JARVIS_JOBS_ALERTS=1` (default), the boards are polled every `JARVIS_JOBS_ALERT_INTERVAL_MIN` minutes (default 15). New roles scoring at least `JARVIS_JOBS_ALERT_MIN_SCORE` (default 45) are pushed **immediately** ("🚨 New role: …" with score, location warning, and link), capped at `JARVIS_JOBS_ALERT_MAX_PER_RUN` per poll; the rest wait in the Jobs panel. Each interval window is claimed in SQLite, so the CLI and phone server never double-alert. Public ATS APIs have no webhooks, so 5–20 minutes is the practical floor (configurable, minimum 5).
 - **Locations**: `job_locations` in the profile (e.g. `["Bengaluru"]`, with Bangalore/Bengaluru alias handling) plus **every remote role**. On-site roles in other cities are dropped.
 - **Remote roles are all available by default** (`JARVIS_JOBS_REMOTE_SCOPE=any`), each labeled by eligibility so nothing looks open when it isn't:
   - open to India / worldwide / Asia → normal (no warning)

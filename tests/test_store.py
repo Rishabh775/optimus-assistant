@@ -66,3 +66,23 @@ def test_get_messages_limit():
         store.add_message(s["id"], "user", f"m{i}")
     msgs = store.get_messages(s["id"], limit=2)
     assert [m["content"] for m in msgs] == ["m3", "m4"]
+
+
+def test_prune_empty_sessions_only_drops_unused_old_ones():
+    used = store.new_session("used")
+    store.add_message(used["id"], "user", "hello")
+    old_empty = store.new_session()
+    recent_empty = store.new_session()
+
+    import sqlite3
+    from jarvis.server.store import db_path
+    conn = sqlite3.connect(db_path())
+    with conn:
+        conn.execute("UPDATE sessions SET created_at=created_at-7200 WHERE id=?",
+                     (old_empty["id"],))
+    conn.close()
+
+    assert store.prune_empty_sessions() == 1
+    ids = [s["id"] for s in store.list_sessions()]
+    assert used["id"] in ids and recent_empty["id"] in ids
+    assert old_empty["id"] not in ids
