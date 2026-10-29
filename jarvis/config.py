@@ -112,6 +112,8 @@ DEFAULTS = {
     "JARVIS_JOBS_MAX_AGE_DAYS": "21",
     # don't show weak matches in the digest (they stay in the tracker)
     "JARVIS_JOBS_MIN_SCORE": "25",
+    # hide remote roles whose posting never states an eligible region
+    "JARVIS_JOBS_HIDE_UNCLEAR_REMOTE": "0",
     "JARVIS_JOBS_COUNTRY": "in",
     # public, no-auth ATS boards: "provider:company" comma-separated
     "JARVIS_JOBS_BOARDS": (

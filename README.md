@@ -99,7 +99,12 @@ A jobs subsystem (`jarvis/jobs/`) that fills a shortlist and tracks the pipeline
 
 **How it behaves**
 - `jobs_sweep` (daily at `JARVIS_JOBS_SWEEP_TIME`, default 08:30 when enabled) fetches, filters (title relevance, seniority, geo/remote restrictions, freshness, excluded companies), scores 0–100 with explainable notes, stores in `data/jobs/jobs.db`, and pushes the top `JARVIS_JOBS_DIGEST_SIZE` to the phone (ntfy + in-chat note).
-- **Locations**: `job_locations` in the profile (e.g. `["Bengaluru"]`, with Bangalore/Bengaluru alias handling) plus remote roles open to your `country`. On-site roles in other cities and "Remote - United States"-style geo-locked roles are dropped.
+- **Locations**: `job_locations` in the profile (e.g. `["Bengaluru"]`, with Bangalore/Bengaluru alias handling) plus remote roles open to your `country`. On-site roles in other cities are dropped.
+- **Remote eligibility is checked, not trusted** from the location label alone:
+  - `Remote - United States` / `Remote - Bulgaria` etc. → dropped
+  - "Anywhere in the World" is verified against the posting text: closed country lists that don't include India are dropped (e.g. Lemon.io lists selected Asian countries excluding India)
+  - explicit work-authorization rules ("must be authorized to work in the US") → dropped
+  - roles that never state a region are **kept but flagged** as `⚠ verify region` / `⚠ location not stated` in the digest and phone panel; set `JARVIS_JOBS_HIDE_UNCLEAR_REMOTE=1` to hide them instead
 - **Resume-aware**: `resume_path` points at a stable copy (e.g. `data/jobs/resume.pdf`, extracted locally via `pdftotext`). The matcher adds a resume-overlap bonus to each posting, and the agent prompt always notes the resume is on file — it must call `jobs_resume_get` before comparing a role or drafting anything, grounding output in the real resume (never invented experience).
 - Scoring is deterministic and free: title match, stack coverage vs your skills, resume overlap, location/remote fit, freshness, seniority sanity. The agent can add qualitative judgement on request.
 - The phone app has a **💼 Jobs** panel: score, company/title (opens the posting), salary, and a status dropdown (`new → shortlisted → drafting → applied → interview → offer`, plus `rejected`/`skipped`). "Scan for new roles" runs a sweep on demand. Status changes are stored with an event trail.

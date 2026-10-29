@@ -640,7 +640,8 @@
           a.href = j.url;
           row.querySelector('.jsub').textContent =
             (j.company || '') + (j.location ? ' · ' + j.location : '') +
-            (j.salary ? ' · ' + j.salary : '');
+            (j.salary ? ' · ' + j.salary : '') +
+            ((j.score_notes || '').indexOf('⚠') >= 0 ? ' · ⚠ check region' : '');
           var sel = row.querySelector('.jstatus');
           JOB_STATUSES.forEach(function (s) {
             var o = document.createElement('option');

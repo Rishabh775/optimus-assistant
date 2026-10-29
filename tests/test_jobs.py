@@ -329,3 +329,34 @@ def test_jobs_job_get_includes_description_and_history():
     assert "Frontend Engineer" in out and "React design systems" in out
     assert "status: shortlisted" in out and "status:shortlisted" in out
     assert jobs.TOOL_FUNCS["jobs_job_get"](id="nope").startswith("error:")
+
+
+# ------------------------------------------- remote eligibility -----------
+
+def test_remote_scope_blocks_us_only_and_closed_lists(monkeypatch):
+    p = _prof(country="India", job_locations=["Bengaluru"])
+    base = {"title": "Frontend Engineer", "company": "X", "location": "Remote",
+            "source": "t", "url": "https://u", "posted_at": None,
+            "description": ""}
+    us = {**base, "description":
+          "You must be authorized to work in the United States."}
+    assert discovery._want(us, p) is False
+
+    lemon = ("We hire across countries across Europe, Latin America, North "
+             "America (the U.S. and Canada), selected countries in Asia "
+             "(Japan, Singapore, South Korea, the Philippines, Indonesia, "
+             "Malaysia, Vietnam, Thailand, and Israel), Oceania.")
+    assert discovery._want({**base, "description": lemon}, p) is False
+
+    india = {**base, "description": "Open to candidates in India and APAC."}
+    assert discovery._want(india, p) is True
+    assert india["remote_scope"] == "country"
+
+    vague = {**base, "description": "A friendly distributed team."}
+    assert discovery._want(vague, p) is True
+    assert vague["remote_scope"] == "unknown"
+    _, notes = match.score_job(vague, p)
+    assert "verify region" in notes
+
+    monkeypatch.setenv("JARVIS_JOBS_HIDE_UNCLEAR_REMOTE", "1")
+    assert discovery._want({**base, "description": "A friendly team."}, p) is False

@@ -267,25 +267,64 @@ _ENTRY_TITLE_RE = re.compile(
 _OFF_FIELD_RE = re.compile(
     r"\b(designer|design|recruiter|sales|marketing|accountant|writer|"
     r"customer support|support engineer)\b", re.I)
-def _geo_compatible(job: dict, prof: dict) -> bool:
-    """Remote jobs must be open to the user's country; on-site roles are
-    handled by the target-location filter."""
-    country = (prof.get("country") or "").strip().lower()
-    if not country or not match.is_remote(job):
-        return True
+
+# Remote eligibility signals in the posting body (location labels lie:
+# "Anywhere in the World" often hides a closed country list).
+_US_ONLY_RE = re.compile(
+    r"(authori[sz]ed to work in the (?:u\.?s\.?|united states)"
+    r"|u\.?s\.? work authori[sz]ation"
+    r"|must (?:be )?(?:based|reside|live) in the (?:u\.?s\.?|united states)"
+    r"|us[- ]based only"
+    r"|open only to (?:candidates in )?(?:the )?(?:u\.?s\.?|united states))",
+    re.I)
+_COUNTRY_LIST_RE = re.compile(
+    r"(?:countries across|selected countries in|eligible countries"
+    r"|open to (?:candidates )?(?:in|from)|hiring (?:in|only in)"
+    r"|must (?:be )?(?:based|reside|live) in)[^.]{0,400}", re.I)
+_COUNTRY_NAMES = (
+    "europe", "north america", "latin america", "south america", "u.s.",
+    "united states", "canada", "united kingdom", "emea", "australia",
+    "japan", "singapore", "south korea", "philippines", "indonesia",
+    "malaysia", "vietnam", "thailand", "israel", "germany", "france",
+    "brazil", "mexico", "argentina", "africa", "middle east",
+)
+_WORLD_RE = re.compile(r"\b(worldwide|anywhere|global(?:ly)?)\b", re.I)
+
+
+def remote_scope(job: dict, prof: dict) -> str:
+    """Classify remote eligibility: worldwide | country | unknown | blocked
+    (plus 'onsite' for non-remote roles). Conservative: an unstated region
+    is 'unknown', never assumed eligible."""
+    if not match.is_remote(job):
+        return "onsite"
     loc = (job.get("location") or "").strip().lower()
-    if not loc or loc in ("remote", "n/a", "anywhere", "anywhere in the world"):
-        return True
+    desc = job.get("description") or ""
+    country = (prof.get("country") or "").strip().lower()
+
+    if _US_ONLY_RE.search(desc):
+        return "blocked"
+
+    # closed country lists ("countries across ... selected countries in Asia
+    # (Japan, Singapore, ...)") -- eligible only when India is named.
+    for window in _COUNTRY_LIST_RE.findall(desc):
+        w = window.lower()
+        if "india" in w:
+            return "country"
+        if _WORLD_RE.search(w) and not any(c in w for c in _COUNTRY_NAMES):
+            return "worldwide"
+        if any(c in w for c in _COUNTRY_NAMES):
+            return "blocked"
+
     if any(k in loc for k in ("worldwide", "anywhere", "global", "asia",
-                              "apac", country)):
-        return True
-    targets = [str(t) for t in (prof.get("job_locations") or [])]
-    if targets and match.loc_matches(loc, targets):
-        return True
-    # explicitly restricted to somewhere else
-    return False
-
-
+                              "apac")) or (country and country in loc):
+        return "worldwide" if country and country in loc else "worldwide"
+    if country and country in desc.lower() and "india" in desc.lower():
+        return "country"
+    if loc and loc not in ("remote", "n/a", "anywhere", "anywhere in the world"):
+        return "blocked"          # explicit different place
+    if _WORLD_RE.search(desc):
+        return "worldwide"
+    return "unknown"
 def _want(job: dict, prof: dict) -> bool:
     title = (job.get("title") or "").lower()
     mine = int(prof.get("min_years") or 0)
@@ -303,8 +342,12 @@ def _want(job: dict, prof: dict) -> bool:
     need_years = match.required_years(f"{title} {job.get('description') or ''}")
     if need_years and need_years > mine + 6:
         return False
-    if not _geo_compatible(job, prof):
+    scope = remote_scope(job, prof)
+    if scope == "blocked":
         return False
+    if scope == "unknown" and config.get_bool("JARVIS_JOBS_HIDE_UNCLEAR_REMOTE"):
+        return False
+    job["remote_scope"] = scope
 
     # title relevance: roles/skills as whole-word tokens
     tokens = set()
@@ -337,7 +380,7 @@ def _want(job: dict, prof: dict) -> bool:
     if not targets and prof.get("location"):
         targets = [str(prof["location"]).strip().lower()]
     loc = (job.get("location") or "").strip().lower()
-    remote = match.is_remote(job)
+    remote = scope != "onsite"
 
     if remote:
         if not prof.get("remote_ok", True):

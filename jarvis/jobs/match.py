@@ -138,4 +138,11 @@ def score_job(job: dict, prof: dict,
             notes.append(f"{word} role")
             break
 
+    # eligibility transparency: never let an unstated region look confirmed
+    loc_raw = (job.get("location") or "").strip().lower()
+    if job.get("remote_scope") == "unknown":
+        notes.append("⚠ verify region")
+    elif loc_raw in ("", "n/a"):
+        notes.append("⚠ location not stated")
+
     return max(0.0, min(100.0, round(score, 1))), "; ".join(notes)
