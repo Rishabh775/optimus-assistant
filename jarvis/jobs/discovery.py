@@ -343,11 +343,12 @@ def _want(job: dict, prof: dict) -> bool:
     if need_years and need_years > mine + 6:
         return False
     scope = remote_scope(job, prof)
-    if scope == "blocked":
+    job["remote_scope"] = scope
+    if scope == "blocked" and \
+            (config.get("JARVIS_JOBS_REMOTE_SCOPE") or "any").lower() != "any":
         return False
     if scope == "unknown" and config.get_bool("JARVIS_JOBS_HIDE_UNCLEAR_REMOTE"):
         return False
-    job["remote_scope"] = scope
 
     # title relevance: roles/skills as whole-word tokens
     tokens = set()

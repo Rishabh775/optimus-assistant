@@ -138,9 +138,14 @@ def score_job(job: dict, prof: dict,
             notes.append(f"{word} role")
             break
 
-    # eligibility transparency: never let an unstated region look confirmed
+    # eligibility transparency: never let an unstated or foreign region look
+    # confirmed; in "any" mode these are shown but labeled and ranked lower
     loc_raw = (job.get("location") or "").strip().lower()
-    if job.get("remote_scope") == "unknown":
+    scope = job.get("remote_scope")
+    if scope == "blocked":
+        score -= 8
+        notes.append("⚠ region-restricted")
+    elif scope == "unknown":
         notes.append("⚠ verify region")
     elif loc_raw in ("", "n/a"):
         notes.append("⚠ location not stated")

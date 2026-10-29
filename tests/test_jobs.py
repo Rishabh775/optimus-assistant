@@ -266,7 +266,7 @@ def test_tools_registered_and_work(monkeypatch):
 # ------------------------------------------------ Bangalore / remote ------
 
 
-def test_target_locations_bangalore_or_remote():
+def test_target_locations_bangalore_or_remote(monkeypatch):
     p = _prof(job_locations=["Bengaluru"], location="Hyderabad",
               country="India")
     base = {"title": "Frontend Engineer", "company": "X", "description": "react",
@@ -274,8 +274,14 @@ def test_target_locations_bangalore_or_remote():
     assert discovery._want({**base, "location": "Bangalore, India"}, p)
     assert discovery._want({**base, "location": "Bengaluru, India"}, p)  # alias
     assert discovery._want({**base, "location": "Remote - India"}, p)
+
+    monkeypatch.setenv("JARVIS_JOBS_REMOTE_SCOPE", "eligible")
     assert not discovery._want({**base, "location": "Pune, India"}, p)
     assert not discovery._want({**base, "location": "Remote - United States"}, p)
+
+    # default "any": foreign-restricted remote stays visible (flagged)
+    monkeypatch.setenv("JARVIS_JOBS_REMOTE_SCOPE", "any")
+    assert discovery._want({**base, "location": "Remote - United States"}, p)
 
 
 def test_profile_job_locations_normalized():
@@ -333,20 +339,32 @@ def test_jobs_job_get_includes_description_and_history():
 
 # ------------------------------------------- remote eligibility -----------
 
-def test_remote_scope_blocks_us_only_and_closed_lists(monkeypatch):
+def test_remote_scope_modes(monkeypatch):
     p = _prof(country="India", job_locations=["Bengaluru"])
     base = {"title": "Frontend Engineer", "company": "X", "location": "Remote",
             "source": "t", "url": "https://u", "posted_at": None,
             "description": ""}
     us = {**base, "description":
           "You must be authorized to work in the United States."}
-    assert discovery._want(us, p) is False
-
-    lemon = ("We hire across countries across Europe, Latin America, North "
+    lemon = {**base, "description":
+             "We hire across countries across Europe, Latin America, North "
              "America (the U.S. and Canada), selected countries in Asia "
              "(Japan, Singapore, South Korea, the Philippines, Indonesia, "
-             "Malaysia, Vietnam, Thailand, and Israel), Oceania.")
-    assert discovery._want({**base, "description": lemon}, p) is False
+             "Malaysia, Vietnam, Thailand, and Israel), Oceania."}
+
+    # eligible-only mode hides roles restricted to other regions
+    monkeypatch.setenv("JARVIS_JOBS_REMOTE_SCOPE", "eligible")
+    assert discovery._want(us, p) is False
+    assert discovery._want(lemon, p) is False
+
+    # "any" mode (default) keeps them but labels + ranks them lower
+    monkeypatch.setenv("JARVIS_JOBS_REMOTE_SCOPE", "any")
+    keep_us = {**us}
+    assert discovery._want(keep_us, p) is True
+    assert keep_us["remote_scope"] == "blocked"
+    _, notes = match.score_job(keep_us, p)
+    assert "region-restricted" in notes
+    assert discovery._want({**lemon}, p) is True
 
     india = {**base, "description": "Open to candidates in India and APAC."}
     assert discovery._want(india, p) is True
