@@ -225,6 +225,11 @@
   .jstatus{flex:none;background:var(--panel2);color:var(--text);border:1px solid var(--line);
            border-radius:8px;padding:6px 6px;font-size:12px}
   #jstats{margin:2px 0 8px}
+  .jfilter{display:flex;align-items:center;gap:7px;color:var(--dim);
+           font-size:11.5px;margin:0 0 6px}
+  .jfilter input{accent-color:var(--accent);width:15px;height:15px}
+  .jsrc{display:inline-block;padding:1px 6px;border-radius:6px;background:#0d0f13;
+        border:1px solid var(--line);font-size:10px;color:var(--dim);margin-right:5px}
   #rail .head{gap:6px}
   .mini{background:transparent;color:var(--text);font-size:17px;padding:8px 9px}
   .mini:active{background:var(--panel2)}
@@ -301,6 +306,7 @@
   <div class="panel">
     <div class="phead"><h2>Jobs</h2><button id="jclose" type="button">✕</button></div>
     <div id="jstats" class="rhint"></div>
+    <label class="jfilter"><input type="checkbox" id="jshowall"> Show low-score matches</label>
     <div id="jlist"></div>
     <div class="rform"><button id="jsweep" type="button" style="flex:1">Scan for new roles</button></div>
     <div class="rhint">Scan is read-only — nothing is applied to. Set roles by telling Soundwave, e.g. “set my jobs profile: frontend engineer, React, TypeScript, Bengaluru, 2 years”.</div>
@@ -668,6 +674,28 @@
   var js = $('#jsheet');
   var JOB_STATUSES = ['new', 'shortlisted', 'drafting', 'applied',
                       'interview', 'offer', 'rejected', 'skipped'];
+  var jobsShowAll = false;
+  try { jobsShowAll = localStorage.getItem('sw-jobs-showall') === '1'; } catch (e) {}
+  $('#jshowall').checked = jobsShowAll;
+  $('#jshowall').onchange = function () {
+    jobsShowAll = this.checked;
+    try { localStorage.setItem('sw-jobs-showall', jobsShowAll ? '1' : '0'); } catch (e) {}
+    loadJobs();
+  };
+
+  function sourceLabel(src) {
+    if (!src) return 'unknown';
+    if (src.indexOf('greenhouse:') === 0) return 'Greenhouse · ' + src.split(':')[1];
+    if (src.indexOf('ashby:') === 0) return 'Ashby · ' + src.split(':')[1];
+    if (src.indexOf('lever:') === 0) return 'Lever · ' + src.split(':')[1];
+    if (src === 'email') return 'email alert';
+    if (src === 'manual') return 'pasted link';
+    if (src === 'weworkremotely') return 'WWR';
+    if (src === 'himalayas') return 'Himalayas';
+    if (src === 'remotive') return 'Remotive';
+    if (src === 'adzuna') return 'Adzuna';
+    return src;
+  }
 
   function openJobs() { closeRail(); closeSheet(); js.style.display = 'flex'; loadJobs(); }
   function closeJobs() { js.style.display = 'none'; }
@@ -680,19 +708,20 @@
       .then(function (r) { return r.json(); })
       .then(function (st) {
         var b = st.by_status || {};
+        var floor = st.min_score || 25;
         $('#jstats').textContent = st.total + ' tracked · ' + (b.new || 0) +
           ' new · ' + (b.applied || 0) + ' applied · ' +
-          (b.interview || 0) + ' interview';
-      }).catch(function () {});
-
-    fetch('/api/jobs?limit=50', { headers: headers() })
-      .then(function (r) { return r.json(); })
+          (b.interview || 0) + ' interview' +
+          (jobsShowAll ? '' : ' · showing ≥' + floor);
+        var q = '/api/jobs?limit=50' + (jobsShowAll ? '' : '&min_score=' + floor);
+        return fetch(q, { headers: headers() });
+      }).then(function (r) { return r.json(); })
       .then(function (data) {
         var list = $('#jlist');
         list.innerHTML = '';
         var rows = data.jobs || [];
         if (!rows.length) {
-          list.innerHTML = '<div class="note">no jobs yet — run a scan below</div>';
+          list.innerHTML = '<div class="note">no jobs — try “Scan for new roles” or tick “Show low-score matches”</div>';
           return;
         }
         rows.forEach(function (j) {
@@ -705,10 +734,15 @@
           var a = row.querySelector('.jtitle a');
           a.textContent = j.title || '(untitled)';
           a.href = j.url;
-          row.querySelector('.jsub').textContent =
+          var sub = row.querySelector('.jsub');
+          var badge = document.createElement('span');
+          badge.className = 'jsrc';
+          badge.textContent = sourceLabel(j.source);
+          sub.appendChild(badge);
+          sub.appendChild(document.createTextNode(
             (j.company || '') + (j.location ? ' · ' + j.location : '') +
             (j.salary ? ' · ' + j.salary : '') +
-            ((j.score_notes || '').indexOf('⚠') >= 0 ? ' · ⚠ check region' : '');
+            ((j.score_notes || '').indexOf('⚠') >= 0 ? ' · ⚠ check region' : '')));
           var sel = row.querySelector('.jstatus');
           JOB_STATUSES.forEach(function (s) {
             var o = document.createElement('option');

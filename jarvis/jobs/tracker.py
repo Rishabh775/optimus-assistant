@@ -172,6 +172,18 @@ def update_status(job_id: str, status: str, note: str = "") -> bool:
     return n > 0
 
 
+def delete(job_id: str) -> bool:
+    """Remove a tracked job and its events."""
+    conn = _connect()
+    try:
+        with conn:
+            conn.execute("DELETE FROM job_events WHERE job_id=?", (job_id,))
+            n = conn.execute("DELETE FROM jobs WHERE id=?", (job_id,)).rowcount
+    finally:
+        conn.close()
+    return n > 0
+
+
 def events(job_id: str, limit: int = 20) -> list:
     conn = _connect()
     try:

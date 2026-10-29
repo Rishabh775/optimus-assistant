@@ -580,3 +580,25 @@ def test_email_tools_registered():
     names = {s["name"] for s in TOOL_SCHEMAS}
     for n in ("jobs_ingest_email", "jobs_add_url"):
         assert n in names and n in TOOL_FUNCS
+
+
+def test_tracker_delete_removes_job_and_events():
+    jid = tracker.upsert(_job(url="https://x/del"))
+    assert tracker.delete(jid) is True
+    assert tracker.get(jid) is None
+    assert tracker.delete(jid) is False
+
+
+def test_email_ingest_skips_intern_roles_for_experienced(monkeypatch):
+    profile.update({"roles": ["frontend"], "min_years": 2})
+    monkeypatch.setenv("JARVIS_JOBS_INGEST_EMAIL", "1")
+    from jarvis.jobs import email_ingest as ei
+    html = ('<a href="https://in.indeed.com/viewjob?jk=i1">'
+            'Frontend Development Intern</a>')
+    monkeypatch.setattr(ei, "_recent_alert_messages",
+                        lambda days=2, limit=40: ([{"id": "1",
+                                                    "subject": "alert",
+                                                    "html": html}], None))
+    assert ei.ingest()["inserted"] == 0
+    profile.update({"min_years": 0})
+    assert ei.ingest()["inserted"] == 1

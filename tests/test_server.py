@@ -384,3 +384,16 @@ def test_jobs_sweep_endpoint_calls_skill(client, monkeypatch):
     r = client.post("/api/jobs/sweep", headers=_auth(client))
     assert r.status_code == 200
     assert r.json() == {"ok": True, "found": 3, "inserted": 2}
+
+
+def test_jobs_min_score_filter(client):
+    from jarvis.jobs import tracker
+    tracker.upsert({"source": "test", "company": "Low", "title": "A",
+                    "url": "https://x/1", "score": 10})
+    tracker.upsert({"source": "test", "company": "High", "title": "B",
+                    "url": "https://x/2", "score": 80})
+    rows = client.get("/api/jobs?min_score=50", headers=_auth(client)).json()["jobs"]
+    assert [r["company"] for r in rows] == ["High"]
+    assert client.get("/api/jobs?min_score=500",
+                      headers=_auth(client)).status_code == 400
+    assert client.get("/api/jobs/stats", headers=_auth(client)).json()["min_score"] == 25

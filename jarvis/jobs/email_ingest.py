@@ -41,6 +41,8 @@ _COMPANY_LOC = re.compile(
     r"^([A-Z][\w&.,'’()\- ]{1,48}?)\s*[·•|]\s*([A-Za-z .(),\-]{2,48})")
 
 _CACHE = {"ts": 0.0, "jobs": []}
+_ENTRY_TITLE = re.compile(r"\b(intern|internship|trainee|fresher|new grad|"
+                          r"graduate)\b", re.I)
 
 
 def _clean(text: str) -> str:
@@ -187,7 +189,10 @@ def ingest(days: int = 2) -> dict:
             candidates.append(job)
 
     inserted = []
+    experienced = int(prof.get("min_years") or 0) >= 1
     for job in candidates[:60]:
+        if experienced and _ENTRY_TITLE.search(job["title"]):
+            continue                       # no intern/fresher roles
         row = {
             "source": "email",
             "company": job["company"],
@@ -197,7 +202,8 @@ def ingest(days: int = 2) -> dict:
             "description": "",
             "posted_at": time.time(),
             "salary": "",
-            "remote": any(k in job["url"] for k in ("indeed", "linkedin")),
+            # don't assume remote from the domain: alert emails omit location
+            "remote": "remote" in (job.get("location") or "").lower(),
         }
         score, notes = match.score_job(row, prof, resume_kw)
         row["score"], row["score_notes"] = score, notes

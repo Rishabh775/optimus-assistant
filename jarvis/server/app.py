@@ -273,13 +273,17 @@ def create_app() -> FastAPI:
     # ---- jobs skill (discovery + tracker; nothing is submitted here) ----
 
     @app.get("/api/jobs")
-    def jobs_list(status: str = "", limit: int = 50,
+    def jobs_list(status: str = "", limit: int = 50, min_score: float = 0,
                   authorization: str | None = Header(default=None)):
         _bearer(authorization)
         if status and status not in jobs.tracker.STATUSES:
             raise HTTPException(status_code=400,
                                 detail=f"bad status {status!r}")
-        rows = jobs.tracker.list_jobs(status=status, limit=limit)
+        if not 0 <= min_score <= 100:
+            raise HTTPException(status_code=400,
+                                detail="min_score must be 0-100")
+        rows = jobs.tracker.list_jobs(status=status, limit=limit,
+                                      min_score=min_score)
         keep = ("id", "source", "company", "title", "location", "url",
                 "salary", "score", "score_notes", "status", "created_at",
                 "applied_at")
@@ -288,7 +292,9 @@ def create_app() -> FastAPI:
     @app.get("/api/jobs/stats")
     def jobs_stats(authorization: str | None = Header(default=None)):
         _bearer(authorization)
-        return jobs.tracker.stats()
+        st = jobs.tracker.stats()
+        st["min_score"] = config.get_int("JARVIS_JOBS_MIN_SCORE")
+        return st
 
     @app.get("/api/jobs/profile")
     def jobs_profile(authorization: str | None = Header(default=None)):
