@@ -60,6 +60,24 @@ def _jobs_resume_line() -> str:
     return ""
 
 
+def _skills_block() -> str:
+    try:
+        from .builtin_tools import discover_skills, SKILLS_DIR
+        skills = discover_skills()
+    except Exception:
+        skills = None
+    if not skills:
+        return ""
+    lines = [f"  - {s['id']}: {s['description'] or s['name']}" for s in skills]
+    return (
+        "\nSKILLS - on-demand expertise, load BEFORE doing a matching task "
+        "via skill_load(skill_id) (full playbooks in %s):\n%s\n"
+        "Loaded skill content changes HOW you work (approach, standards, "
+        "checklists) - never the length of your spoken answer."
+        % (SKILLS_DIR, "\n".join(lines))
+    )
+
+
 def _build_system(name: str, memory_count: int) -> str:
     """Self-knowledge prompt: tell the assistant its OWN configuration so it
     can answer 'what/who are you' accurately instead of guessing."""
@@ -115,7 +133,7 @@ Target locations come from the jobs profile (job_locations, e.g.
 Bangalore) plus remote roles. Nothing is auto-submitted: applications are
 a later, confirmation-gated phase.
 {resume_line}
-
+{_skills_block()}
 Use tools when needed. Speak your answer aloud, so be concise.
 For durable user info ("my name is", "I prefer", "remember that", allergies, constraints), call remember_fact so it persists. Use recall_facts if asked what you know about the user.
 For "what's important in my email": call email_triage (deterministic ranking by VIP senders + keyword weights, with reasons), summarize the HIGH ones, and email_read for detail. Inspecting email does not mark it read.""" + _personality()
