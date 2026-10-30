@@ -140,7 +140,7 @@ def _maybe_reset(text: str) -> str:
     for p in RESET_PREFIXES:
         if low.startswith(p):
             _SESSION = f"{DEFAULT_SESSION}_{int(time.time())}"
-            voice.speak("Starting a fresh session.", blocking=True)
+            print("[soundwave] fresh session: " + _SESSION)
             return text.strip()[len(p):].strip()
     return text
 
