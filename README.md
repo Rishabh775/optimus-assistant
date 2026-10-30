@@ -38,10 +38,11 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (42)
+## Tools (45)
 
 | Tool | What |
 |---|---|
+| `skills_list`, `skill_load` | on-demand expert skills shared with the opencode CLI (`~/.config/opencode/skills`, override with `JARVIS_SKILLS_DIR`); the system prompt lists the menu and the agent loads a full playbook before doing a matching task |
 | `self_status` | report the assistant's own live config/state (introspection) |
 | `remember_fact`, `recall_facts`, `forget_fact` | durable user memory (name, preferences) persisted to `data/facts.jsonl` |
 | `shell_run`, `read_file`, `write_file` | local system |
@@ -58,8 +59,29 @@ python -m jarvis --query "..."    # one-shot
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
 
-## Proactive loop (reminders)
+## Soundwave mode (OpenCode voice bridge)
 
+`opencode_voice.py` drives the **opencode** CLI by voice, reusing Optimus's
+own wake word / STT / TTS stack (`hey soundwave` → faster-whisper →
+`opencode run` → edge-tts answer). OpenCode itself is untouched; Optimus is
+a sidecar bridge:
+
+```bash
+cd ~/jarvis && source .venv/bin/activate
+python opencode_voice.py                     # wake-word loop for opencode
+python opencode_voice.py --text "summarize recent commits"   # one-shot debug
+```
+
+- One **persistent session** (`ses_soundwave_voice`) is reused every turn, so
+  spoken follow-ups ("now make the button blue") keep project context; say
+  **"soundwave reset"** to start a fresh session.
+- Runs in the directory you launched it from (`JARVIS_OPENCODE_DIR` to pin one).
+- Permissions default to **rejected** (opencode tells you what it wanted to
+  run); set `JARVIS_OPENCODE_AUTO=1` to auto-approve if you fully trust it.
+- Other env knobs: `JARVIS_OPENCODE_MODEL` (pin provider/model),
+  `JARVIS_OPENCODE_SESSION`, `JARVIS_OPENCODE_TIMEOUT` (default 600s).
+
+## Proactive loop (reminders)
 A background scheduler thread runs in **every** long-running mode (text, voice, wake, hotkey) and in the phone-app server, so a reminder set in one place reaches you everywhere the assistant can.
 
 Reminders are notify-only: firing delivers through the listener chain below; the scheduler never runs the agent by itself.
