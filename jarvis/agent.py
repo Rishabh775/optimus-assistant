@@ -122,10 +122,11 @@ For "what's important in my email": call email_triage (deterministic ranking by 
 
 
 class Agent:
-    def __init__(self, confirm=None):
+    def __init__(self, confirm=None, on_event=None):
         self.llm = LLM()
         self.memory = Memory()
         self.confirm = confirm          # callable(reason, fn_name, args) -> bool
+        self.on_event = on_event        # optional UI hook (route/tool events)
         name = config.get("JARVIS_NAME")
         try:
             mem_count = self.memory.count()
@@ -133,6 +134,17 @@ class Agent:
             mem_count = 0
         self.history = [{"role": "system",
                          "content": _build_system(name, mem_count)}]
+
+    def _event(self, kind: str, **data) -> bool:
+        """Forward an event to the UI hook. True when a hook consumed it."""
+        cb = getattr(self, "on_event", None)
+        if cb is None:
+            return False
+        try:
+            cb({"type": kind, **data})
+        except Exception:
+            pass
+        return True
 
     def _confirmed(self, reason: str, fn_name: str, args: dict,
                    mandatory: bool = False) -> bool:
@@ -198,7 +210,9 @@ class Agent:
             except Exception as e:
                 return f"Sorry, I couldn't reach the model: {e}"
             msg = resp.choices[0].message
-            console.print(f"[dim]route: {route.provider}/{route.model} ({route.reason})[/dim]")
+            if not self._event("route", provider=route.provider,
+                               model=route.model, reason=route.reason):
+                console.print(f"[dim]route: {route.provider}/{route.model} ({route.reason})[/dim]")
 
             tool_calls = getattr(msg, "tool_calls", None)
             if not tool_calls:
@@ -215,7 +229,8 @@ class Agent:
                 except (json.JSONDecodeError, ValueError) as e:
                     args = None
                     out = f"ERROR: malformed tool arguments: {e}"
-                console.print(Panel(f"[bold]{fn_name}[/bold] {args}", border_style="cyan"))
+                if not self._event("tool", name=fn_name, args=args):
+                    console.print(Panel(f"[bold]{fn_name}[/bold] {args}", border_style="cyan"))
                 fn = TOOL_FUNCS.get(fn_name)
                 if args is not None:
                     if not fn:
@@ -234,7 +249,9 @@ class Agent:
                                 out = f"ERROR: bad arguments for {fn_name}: {e}"
                             except Exception as e:
                                 out = f"ERROR: {e}"
-                console.print(Panel(str(out)[:1000], title="result", border_style="green"))
+                if not self._event("tool_result", name=fn_name,
+                                   output=str(out)[:1000]):
+                    console.print(Panel(str(out)[:1000], title="result", border_style="green"))
                 msgs.append({"role": "tool", "tool_call_id": tc.id, "content": str(out)})
 
         # Step budget exhausted: don't dead-end with "Reached max tool steps" --
