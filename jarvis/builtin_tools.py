@@ -432,6 +432,17 @@ def daily_briefing() -> str:
     return build()
 
 
+# ---- vision: photos/screenshots uploaded from the phone ----
+
+def analyze_image(path: str, prompt: str = "") -> str:
+    """Describe an image / transcribe its text (uploads, screenshots)."""
+    from .vision import analyze
+    try:
+        return analyze(path, prompt)
+    except (ValueError, RuntimeError) as e:
+        return f"error: {e}"
+
+
 def ha_list_entities(domain: str = "") -> str:
     from .tools.homeassistant import ha_list_entities
     return ha_list_entities(domain or None)
@@ -829,6 +840,22 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "analyze_image",
+        "description": ("Look at an image file (photo/screenshot/document "
+                        "uploaded from the phone) and describe it / read its "
+                        "text. ALWAYS use this when a chat message includes an "
+                        "image attachment. `prompt` optionally asks a specific "
+                        "question about the image."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "prompt": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "ha_list_entities",
         "description": "List Home Assistant entities, optionally filtered by domain (light, switch, sensor...).",
         "parameters": {
@@ -921,6 +948,7 @@ TOOL_FUNCS = {
     "cancel_reminder": cancel_reminder,
     "weather": weather,
     "daily_briefing": daily_briefing,
+    "analyze_image": analyze_image,
     "ha_list_entities": ha_list_entities,
     "ha_state": ha_state,
     "ha_call": ha_call,

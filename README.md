@@ -38,7 +38,7 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (45)
+## Tools (49)
 
 | Tool | What |
 |---|---|
@@ -52,8 +52,10 @@ python -m jarvis --query "..."    # one-shot
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
 | `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
+| `analyze_image` | look at a photo/screenshot uploaded from the phone (vision model on the same gateway, `JARVIS_VISION_MODEL`, fallbacks) and describe it / transcribe its text |
 | `weather`, `daily_briefing` | Open-Meteo weather (no key, home location via `JARVIS_LAT/LON`); composite morning briefing (weather + calendar + email + reminders) also scheduled via `JARVIS_BRIEFING_TIME` |
 | `jobs_profile_get`, `jobs_profile_update`, `jobs_resume_get` | read/update the job-search profile (roles, skills, target cities, experience) and read the resume text conversationally |
+| `jobs_ingest_email`, `jobs_add_url` | read Indeed/LinkedIn/Naukri job-alert emails into the tracker; add a job by pasted URL |
 | `jobs_sweep`, `jobs_digest`, `jobs_list`, `jobs_job_get`, `job_update` | discover + score roles from public boards, daily digest, full posting text, tracked application pipeline (read-only: nothing is submitted yet) |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 

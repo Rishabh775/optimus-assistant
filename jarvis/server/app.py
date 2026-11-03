@@ -500,8 +500,9 @@ def create_app() -> FastAPI:
                         state["busy"] = True
                         body = text
                         if atts:
-                            body += ("\n\n[Attached files - use read_file or "
-                                     "shell_run to inspect]\n")
+                            body += ("\n\n[Attached files - use analyze_image "
+                                     "for images; read_file or shell_run for "
+                                     "text/documents]\n")
                             body += "\n".join(
                                 f"📎 {a['name']} ({a['mime'] or 'file'}): "
                                 f"{a['path']}" for a in atts)

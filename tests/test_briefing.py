@@ -117,10 +117,12 @@ def test_build_happy_path(monkeypatch):
     _stub_sections(monkeypatch)
     monkeypatch.setattr(briefing, "weather",
                         lambda city="": "Weather: 21C, rain")
+    today_noon = briefing.scheduler._local_now().replace(
+        hour=12, minute=0, second=0, microsecond=0)
     monkeypatch.setattr(briefing.scheduler, "list_pending",
                         lambda *a, **k: [
                             {"id": "x", "message": "call the bank",
-                             "due_at": time.time() + 1800, "repeat": ""}])
+                             "due_at": today_noon.timestamp(), "repeat": ""}])
     out = briefing.build()
     assert "Good" in out and "Weather: 21C" in out
     assert "standup" in out and "invoice due" in out
