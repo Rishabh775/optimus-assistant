@@ -348,6 +348,36 @@
     var h = vv ? vv.height : window.innerHeight;
     document.documentElement.style.setProperty('--app-vh', Math.round(h) + 'px');
   }
+  // Native keyboard events (Capacitor Keyboard plugin). Edge-to-edge on
+  // Android 15 ignores adjustResize on some devices (OnePlus/OxygenOS), so
+  // we subtract the native keyboard height explicitly as a fallback.
+  var nativeKeyboard = null, kbBaseHeight = 0;
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins) {
+      nativeKeyboard = window.Capacitor.Plugins.Keyboard || null;
+    }
+  } catch (e) {}
+  if (nativeKeyboard) {
+    nativeKeyboard.addListener('keyboardWillShow', function (info) {
+      kbBaseHeight = kbBaseHeight || window.innerHeight;
+      var vvH = window.visualViewport ? window.visualViewport.height
+                                      : window.innerHeight;
+      var h = vvH;
+      if (info && info.keyboardHeight) {
+        h = Math.min(vvH, kbBaseHeight - info.keyboardHeight);
+      }
+      document.documentElement.style.setProperty(
+        '--app-vh', Math.round(Math.max(240, h)) + 'px');
+      setTimeout(function () {
+        try { document.querySelector('#msg').scrollIntoView({ block: 'nearest' }); }
+        catch (e) {}
+      }, 80);
+    });
+    nativeKeyboard.addListener('keyboardWillHide', function () {
+      kbBaseHeight = 0;
+      fitViewport();
+    });
+  }
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', fitViewport);
     window.visualViewport.addEventListener('scroll', fitViewport);
