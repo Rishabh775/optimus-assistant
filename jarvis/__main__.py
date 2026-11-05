@@ -420,7 +420,8 @@ def _text_confirm(reason: str, fn_name: str, args: dict,
 
 def main():
     p = argparse.ArgumentParser(prog="optimus")
-    p.add_argument("--mode", choices=["text", "voice", "hotkey", "wake"],
+    p.add_argument("--mode",
+                   choices=["text", "voice", "hotkey", "wake", "tui"],
                    default="text")
     p.add_argument("--query", help="one-shot query")
     args = p.parse_args()
@@ -428,14 +429,8 @@ def main():
     for problem in config.validate():
         console.print(f"[yellow]config warning:[/yellow] {problem}")
 
-    confirm = None
-    if config.get_bool("JARVIS_CONFIRM") and not args.query:
-        confirm = _text_confirm if args.mode == "text" else _voice_confirm
-
-    agent = Agent(confirm=confirm)
-
     if args.query:
-        print(agent.ask(args.query))
+        print(Agent(confirm=None).ask(args.query))
         return
 
     # proactive loop: durable reminders (all long-running modes)
@@ -444,7 +439,18 @@ def main():
     pushed = push.install()
     briefing.install()
     jobs.install()
+
+    if args.mode == "tui":
+        from .tui import run_tui
+        run_tui()
+        return
+
     print(f"reminders: scheduler up (push {'on' if pushed else 'off'})")
+
+    confirm = None
+    if config.get_bool("JARVIS_CONFIRM"):
+        confirm = _text_confirm if args.mode == "text" else _voice_confirm
+    agent = Agent(confirm=confirm)
 
     if args.mode == "text":
         text_loop(agent)
