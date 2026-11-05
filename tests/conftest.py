@@ -17,6 +17,7 @@ import pytest
 _DATA = tempfile.mkdtemp(prefix="jarvis-test-")
 os.environ.update({
     "JARVIS_DATA_DIR": _DATA,
+    "JARVIS_SKILLS_DIR": tempfile.mkdtemp(prefix="jarvis-skills-"),
     "JARVIS_SOUNDS": "0",
     "JARVIS_WAKE_WORDS": "hey_soundwave",
     "JARVIS_WAKE_THRESHOLD": "0.7",

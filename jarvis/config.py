@@ -139,6 +139,9 @@ DEFAULTS = {
     "JARVIS_ADZUNA_APP_KEY": "",
     # free tier is 250 calls/day -> don't poll it more often than this
     "JARVIS_ADZUNA_MIN_INTERVAL_MIN": "60",
+    # vision: photo/screenshot understanding for phone uploads
+    "JARVIS_VISION_MODEL": "gpt-6-luna",
+    "JARVIS_VISION_MAX_MB": "12",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

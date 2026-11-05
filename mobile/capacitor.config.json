@@ -10,5 +10,11 @@
   "android": {
     "allowMixedContent": false,
     "adjustMarginsForEdgeToEdge": "force"
+  },
+  "plugins": {
+    "Keyboard": {
+      "resize": "none",
+      "style": "DARK"
+    }
   }
 }

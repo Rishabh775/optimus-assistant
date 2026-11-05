@@ -41,10 +41,13 @@ python -m jarvis --query "..."    # one-shot
 
 The TUI (`--mode tui`) streams answers, shows the live route status, and uses a `y`/`n` dialog for confirmed actions. Try `/help` for slash commands (`/auto`, `/briefing`, `/reminders`, `/jobs`, `/new`).
 
-## Tools (42)
+The TUI (`--mode tui`) streams answers, shows the live route status, and uses a `y`/`n` dialog for confirmed actions. Try `/help` for slash commands (`/auto`, `/briefing`, `/reminders`, `/jobs`, `/new`).
+
+## Tools (49)
 
 | Tool | What |
 |---|---|
+| `skills_list`, `skill_load` | on-demand expert skills shared with the opencode CLI (`~/.config/opencode/skills`, override with `JARVIS_SKILLS_DIR`); the system prompt lists the menu and the agent loads a full playbook before doing a matching task |
 | `self_status` | report the assistant's own live config/state (introspection) |
 | `remember_fact`, `recall_facts`, `forget_fact` | durable user memory (name, preferences) persisted to `data/facts.jsonl` |
 | `shell_run`, `read_file`, `write_file` | local system |
@@ -54,15 +57,38 @@ The TUI (`--mode tui`) streams answers, shows the live route status, and uses a 
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
 | `remind_me`, `list_reminders`, `cancel_reminder` | durable reminders that notify you (phone push, speaker) at fire time; SQLite-backed (`JARVIS_REMINDER_DB`), survive reboots; time = ISO, `HH:MM`, or `in 20 minutes`; repeat daily/weekly |
+| `analyze_image` | look at a photo/screenshot uploaded from the phone (vision model on the same gateway, `JARVIS_VISION_MODEL`, fallbacks) and describe it / transcribe its text |
 | `weather`, `daily_briefing` | Open-Meteo weather (no key, home location via `JARVIS_LAT/LON`); composite morning briefing (weather + calendar + email + reminders) also scheduled via `JARVIS_BRIEFING_TIME` |
 | `jobs_profile_get`, `jobs_profile_update`, `jobs_resume_get` | read/update the job-search profile (roles, skills, target cities, experience) and read the resume text conversationally |
+| `jobs_ingest_email`, `jobs_add_url` | read Indeed/LinkedIn/Naukri job-alert emails into the tracker; add a job by pasted URL |
 | `jobs_sweep`, `jobs_digest`, `jobs_list`, `jobs_job_get`, `job_update` | discover + score roles from public boards, daily digest, full posting text, tracked application pipeline (read-only: nothing is submitted yet) |
 | `ha_list_entities`, `ha_state`, `ha_call`, `ha_search` | Home Assistant REST |
 
 Tool calls have a budget of 12 per turn (`JARVIS_MAX_STEPS`). If the agent runs out it does one final no-tools summary call so you still get whatever it found.
 
-## Proactive loop (reminders)
+## Soundwave mode (OpenCode voice bridge)
 
+`opencode_voice.py` drives the **opencode** CLI by voice, reusing Optimus's
+own wake word / STT / TTS stack (`hey soundwave` → faster-whisper →
+`opencode run` → edge-tts answer). OpenCode itself is untouched; Optimus is
+a sidecar bridge:
+
+```bash
+cd ~/jarvis && source .venv/bin/activate
+python opencode_voice.py                     # wake-word loop for opencode
+python opencode_voice.py --text "summarize recent commits"   # one-shot debug
+```
+
+- One **persistent session** (`ses_soundwave_voice`) is reused every turn, so
+  spoken follow-ups ("now make the button blue") keep project context; say
+  **"soundwave reset"** to start a fresh session.
+- Runs in the directory you launched it from (`JARVIS_OPENCODE_DIR` to pin one).
+- Permissions default to **rejected** (opencode tells you what it wanted to
+  run); set `JARVIS_OPENCODE_AUTO=1` to auto-approve if you fully trust it.
+- Other env knobs: `JARVIS_OPENCODE_MODEL` (pin provider/model),
+  `JARVIS_OPENCODE_SESSION`, `JARVIS_OPENCODE_TIMEOUT` (default 600s).
+
+## Proactive loop (reminders)
 A background scheduler thread runs in **every** long-running mode (text, voice, wake, hotkey) and in the phone-app server, so a reminder set in one place reaches you everywhere the assistant can.
 
 Reminders are notify-only: firing delivers through the listener chain below; the scheduler never runs the agent by itself.

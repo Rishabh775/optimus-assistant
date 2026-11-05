@@ -29,6 +29,11 @@ WORKSPACE.mkdir(parents=True, exist_ok=True)
 
 ALLOW_ANY_PATH = os.getenv("JARVIS_ALLOW_ANY_PATH", "0") == "1"
 
+# Skills: shared markdown playbook folder, by default the SAME folder the
+# opencode CLI uses, so one set of skills serves both assistants.
+SKILLS_DIR = Path(os.getenv(
+    "JARVIS_SKILLS_DIR", str(Path.home() / ".config/opencode/skills")))
+
 # Writes outside WORKSPACE but inside $HOME are permitted, but only as a
 # MANDATORY-confirmation action (see confirmation_is_mandatory): the agent
 # asks first, and refuses when no interactive prompt is possible. Set
@@ -427,6 +432,17 @@ def daily_briefing() -> str:
     return build()
 
 
+# ---- vision: photos/screenshots uploaded from the phone ----
+
+def analyze_image(path: str, prompt: str = "") -> str:
+    """Describe an image / transcribe its text (uploads, screenshots)."""
+    from .vision import analyze
+    try:
+        return analyze(path, prompt)
+    except (ValueError, RuntimeError) as e:
+        return f"error: {e}"
+
+
 def ha_list_entities(domain: str = "") -> str:
     from .tools.homeassistant import ha_list_entities
     return ha_list_entities(domain or None)
@@ -446,6 +462,80 @@ def ha_call(service: str, entity_id: str = "", data: str = "") -> str:
 def ha_search(query: str) -> str:
     from .tools.homeassistant import ha_search
     return ha_search(query)
+
+
+def ha_search(query: str) -> str:
+    from .tools.homeassistant import ha_search
+    return ha_search(query)
+
+
+# ---- skills: on-demand expertise, shared with opencode -------------------
+
+def _frontmatter_field(text: str, field: str) -> str:
+    m = re.search(rf"^{field}:\s*(.+?)\s*$", text[:2400], re.M | re.I)
+    return m.group(1).strip().strip("\"'") if m else ""
+
+
+def discover_skills() -> list:
+    """Find skills: <dir>/SKILL.md (id = folder name) or flat <id>.md files.
+
+    Returns dicts: {id, name, description, path}.
+    """
+    out = []
+    try:
+        entries = sorted(SKILLS_DIR.iterdir())
+    except Exception:
+        return out
+    for entry in entries:
+        md = None
+        if entry.is_dir():
+            for cand in ("SKILL.md", "skill.md", "Skill.md"):
+                p = entry / cand
+                if p.is_file():
+                    md = p
+                    break
+        elif entry.suffix == ".md" and entry.name.lower() != "readme.md":
+            md = entry
+        if md is None:
+            continue
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")[:2400]
+        except Exception:
+            continue
+        out.append({
+            "id": md.parent.name if md.parent != SKILLS_DIR else md.stem,
+            "name": _frontmatter_field(text, "name") or md.stem,
+            "description": _frontmatter_field(text, "description"),
+            "path": md,
+        })
+    return out
+
+
+def skills_list() -> str:
+    """List installed skills with their one-line descriptions."""
+    skills = discover_skills()
+    if not skills:
+        return f"No skills installed (SKILLS_DIR={SKILLS_DIR})."
+    lines = [f"{s['id']}: {s['description'] or s['name']}" for s in skills]
+    return "\n".join(lines)
+
+
+def skill_load(skill_id: str) -> str:
+    """Load the full markdown playbook for a skill. Read-only; no sandbox bypass."""
+    want = (skill_id or "").strip().lower()
+    if not want:
+        return "No skill_id given. Available:\n" + skills_list()
+    match = next((s for s in discover_skills()
+                  if s["id"].lower() == want), None)
+    if not match:
+        return f"Unknown skill '{skill_id}'. Available:\n" + skills_list()
+    try:
+        text = match["path"].read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"Failed to load skill '{skill_id}': {e}"
+    # strip the YAML frontmatter (id/name/description block) — not instructions
+    text = re.sub(r"\A---\s*\n.*?\n---\s*\n", "", text, count=1, flags=re.S)
+    return f"[skill {match['id']}] {text.strip()}"
 
 
 TOOL_SCHEMAS = [
@@ -750,6 +840,22 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "analyze_image",
+        "description": ("Look at an image file (photo/screenshot/document "
+                        "uploaded from the phone) and describe it / read its "
+                        "text. ALWAYS use this when a chat message includes an "
+                        "image attachment. `prompt` optionally asks a specific "
+                        "question about the image."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "prompt": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "ha_list_entities",
         "description": "List Home Assistant entities, optionally filtered by domain (light, switch, sensor...).",
         "parameters": {
@@ -788,6 +894,24 @@ TOOL_SCHEMAS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "skills_list",
+        "description": "List installed expert skills with short descriptions.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "skill_load",
+        "description": ("Load a full expert skill playbook as markdown "
+                        "(e.g. when the user asks you to build, review, fix, "
+                        "or design something that matches a listed skill). "
+                        "The content guides your work and your thinking; "
+                        "spoken answers still stay short."),
+        "parameters": {
+            "type": "object",
+            "properties": {"skill_id": {"type": "string"}},
+            "required": ["skill_id"],
+        },
+    },
 ]
 
 
@@ -824,10 +948,13 @@ TOOL_FUNCS = {
     "cancel_reminder": cancel_reminder,
     "weather": weather,
     "daily_briefing": daily_briefing,
+    "analyze_image": analyze_image,
     "ha_list_entities": ha_list_entities,
     "ha_state": ha_state,
     "ha_call": ha_call,
     "ha_search": ha_search,
+    "skills_list": skills_list,
+    "skill_load": skill_load,
 }
 
 # ---- jobs skill (jarvis/jobs): discovery + tracker -----------------------

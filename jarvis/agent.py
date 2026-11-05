@@ -60,6 +60,24 @@ def _jobs_resume_line() -> str:
     return ""
 
 
+def _skills_block() -> str:
+    try:
+        from .builtin_tools import discover_skills, SKILLS_DIR
+        skills = discover_skills()
+    except Exception:
+        skills = None
+    if not skills:
+        return ""
+    lines = [f"  - {s['id']}: {s['description'] or s['name']}" for s in skills]
+    return (
+        "\nSKILLS - on-demand expertise, load BEFORE doing a matching task "
+        "via skill_load(skill_id) (full playbooks in %s):\n%s\n"
+        "Loaded skill content changes HOW you work (approach, standards, "
+        "checklists) - never the length of your spoken answer."
+        % (SKILLS_DIR, "\n".join(lines))
+    )
+
+
 def _build_system(name: str, memory_count: int) -> str:
     """Self-knowledge prompt: tell the assistant its OWN configuration so it
     can answer 'what/who are you' accurately instead of guessing."""
@@ -98,6 +116,7 @@ Tools available:
 - email_triage / email_list / email_read / email_send / email_unread_count: email (IMAP/SMTP)
 - calendar_list / calendar_today / calendar_add: calendar (CalDAV)
 - ha_list_entities / ha_state / ha_call / ha_search: Home Assistant REST
+- analyze_image: describe a photo/screenshot and read its text (phone uploads)
 - jobs_profile_get / jobs_profile_update / jobs_sweep / jobs_digest /
   jobs_list / jobs_job_get / job_update: job search (read-only discovery
   + tracker)
@@ -115,6 +134,10 @@ Target locations come from the jobs profile (job_locations, e.g.
 Bangalore) plus remote roles. Nothing is auto-submitted: applications are
 a later, confirmation-gated phase.
 {resume_line}
+{_skills_block()}
+IMAGES: when a message includes an attachment marked 📎 with an image mime
+type (image/jpeg, image/png, ...), call analyze_image on that exact path
+before answering. Never claim you cannot see an attached image.
 
 Use tools when needed. Speak your answer aloud, so be concise.
 For durable user info ("my name is", "I prefer", "remember that", allergies, constraints), call remember_fact so it persists. Use recall_facts if asked what you know about the user.

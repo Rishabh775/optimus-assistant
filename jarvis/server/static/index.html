@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="theme-color" content="#0f1115">
 <title>Soundwave</title>
 <link rel="manifest" href="/static/manifest.webmanifest">
@@ -28,7 +28,7 @@
   #tok:focus{border-color:var(--accent)}
   #status{color:var(--dim);font-size:13px;min-height:18px;max-width:320px;text-align:center}
   /* app layout */
-  #app{display:none;height:100dvh;flex-direction:row;overflow:hidden}
+  #app{display:none;height:100dvh;height:var(--app-vh,100dvh);flex-direction:row;overflow:hidden}
   /* sidebar */
   #rail{width:var(--rail);min-width:var(--rail);background:var(--panel);
         border-right:1px solid var(--line);display:flex;flex-direction:column;
@@ -79,7 +79,7 @@
              color:var(--dim);font-size:11px;border-top:1px solid var(--line)}
   .rail-foot.on{color:var(--accent)}
   .rail-foot.busy{color:var(--accent2)}
-  #main{flex:1;display:flex;flex-direction:column;min-width:0}
+  #main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:0}
   header{display:flex;align-items:center;gap:10px;padding:12px 16px;
          background:var(--panel);border-bottom:1px solid var(--line)}
   #burger{background:transparent;color:var(--text);font-size:22px;padding:2px 8px;display:none}
@@ -89,7 +89,7 @@
   .dot.on{background:var(--accent)}
   .dot.busy{background:var(--accent2);animation:pulse 1s infinite alternate}
   @keyframes pulse{from{opacity:.4}to{opacity:1}}
-  #log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;
+  #log{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;
        overscroll-behavior:contain}
   #empty{flex:1;display:none;flex-direction:column;align-items:center;justify-content:center;
          padding:18px 16px;text-align:center;gap:4px;overflow-y:auto;
@@ -340,6 +340,66 @@
   var $ = function (s) { return document.querySelector(s); };
   var log = $('#log'), ws = null, busy = false, sid = null, typing = null, streamEl = null;
   var deletedSids = {};            // late replies for deleted chats must be ignored
+
+  // Keep the app sized to the VISUAL viewport so the Android soft keyboard
+  // resizes the layout instead of covering the composer.
+  function fitViewport() {
+    var vv = window.visualViewport;
+    var h = vv ? vv.height : window.innerHeight;
+    document.documentElement.style.setProperty('--app-vh', Math.round(h) + 'px');
+  }
+  // Native keyboard events (Capacitor Keyboard plugin). Edge-to-edge on
+  // Android 15 ignores adjustResize on some devices (OnePlus/OxygenOS), so
+  // we subtract the native keyboard height explicitly as a fallback.
+  var nativeKeyboard = null, kbBaseHeight = 0;
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins) {
+      nativeKeyboard = window.Capacitor.Plugins.Keyboard || null;
+    }
+  } catch (e) {}
+  if (nativeKeyboard) {
+    nativeKeyboard.addListener('keyboardWillShow', function (info) {
+      kbBaseHeight = kbBaseHeight || window.innerHeight;
+      var vvH = window.visualViewport ? window.visualViewport.height
+                                      : window.innerHeight;
+      var h = vvH;
+      if (info && info.keyboardHeight) {
+        h = Math.min(vvH, kbBaseHeight - info.keyboardHeight);
+      }
+      document.documentElement.style.setProperty(
+        '--app-vh', Math.round(Math.max(240, h)) + 'px');
+      setTimeout(function () {
+        try { document.querySelector('#msg').scrollIntoView({ block: 'nearest' }); }
+        catch (e) {}
+      }, 80);
+    });
+    nativeKeyboard.addListener('keyboardWillHide', function () {
+      kbBaseHeight = 0;
+      fitViewport();
+    });
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', fitViewport);
+    window.visualViewport.addEventListener('scroll', fitViewport);
+  }
+  window.addEventListener('resize', fitViewport);
+  window.addEventListener('orientationchange', function () {
+    setTimeout(fitViewport, 200);
+  });
+  document.addEventListener('focusin', function (e) {
+    if (e.target && e.target.id === 'msg') {
+      setTimeout(function () {
+        fitViewport();
+        try { e.target.scrollIntoView({ block: 'nearest' }); } catch (err) {}
+      }, 280);
+    }
+  });
+  document.addEventListener('focusout', function (e) {
+    if (e.target && e.target.id === 'msg') {
+      setTimeout(fitViewport, 200);
+    }
+  });
+  fitViewport();
 
   // register the service worker (enables install + offline; no-op over HTTP)
   if ('serviceWorker' in navigator && window.isSecureContext) {
