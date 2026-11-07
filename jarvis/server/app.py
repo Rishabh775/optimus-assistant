@@ -18,7 +18,7 @@ Agent pipeline to a phone (PWA) over the tailnet / LAN:
     POST /api/briefing            composed daily briefing (sync in pool)
     POST /api/upload              multipart file (photo/doc) -> saved path
     POST /api/transcribe          multipart audio (voice note) -> text (STT)
-    POST /api/whatsapp/inbound    bridge -> agent reply (WhatsApp channel)
+    GET/POST /api/whatsapp/webhook  Meta Cloud API verification + messages
     GET  /api/jobs                tracked jobs (optional ?status=)
     GET  /api/jobs/stats          counts per status
     GET  /api/jobs/profile        job-search profile + configured flag
@@ -45,6 +45,9 @@ in-RAM history for a session is rebuilt from the DB per connection, so
 reopening the PWA continues the conversation.
 """
 import asyncio
+import hashlib
+import hmac
+import json
 import os
 import re
 import secrets
@@ -57,10 +60,10 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from dotenv import load_dotenv, set_key
-from fastapi import (FastAPI, File, Header, HTTPException, UploadFile,
-                     WebSocket, status)
+from fastapi import (BackgroundTasks, FastAPI, File, Header,
+                     HTTPException, Request, UploadFile, WebSocket, status)
 from fastapi.websockets import WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -68,6 +71,7 @@ from pydantic import BaseModel, Field
 from .. import config
 from .. import briefing, jobs, push, scheduler
 from ..agent import Agent
+from ..log import log as _log
 from . import store
 
 load_dotenv()
@@ -83,6 +87,22 @@ _UPLOAD_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _AUDIO_SUFFIXES = {".webm", ".m4a", ".mp3", ".wav", ".ogg", ".opus",
                    ".aac", ".flac", ".3gp"}
 _MAX_ATTACHMENTS = 5
+
+
+def _wa_extract(payload: dict) -> list:
+    """Text messages from a Meta WhatsApp webhook payload."""
+    out = []
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            for msg in value.get("messages") or []:
+                if msg.get("type") != "text":
+                    continue
+                sender = str(msg.get("from") or "")
+                body = ((msg.get("text") or {}).get("body") or "").strip()
+                if sender and body:
+                    out.append((sender, body[:4000]))
+    return out
 
 
 def _uploads_dir() -> Path:
@@ -147,12 +167,6 @@ class _ReminderIn(BaseModel):
 class _JobPatchIn(BaseModel):
     status: str
     note: str = ""
-
-
-class _WAIn(BaseModel):
-    sender: str = Field(alias="from")
-    name: str = ""
-    text: str
 
 
 def create_app() -> FastAPI:
@@ -335,39 +349,84 @@ def create_app() -> FastAPI:
                                 detail="ntfy rejected the push — check URL/topic")
         return {"ok": True}
 
-    # ---- WhatsApp channel (bridge is the whatsapp/ Node service) ----
+    # ---- WhatsApp Cloud API webhook (official, Meta Graph API) ----
 
-    _wa_lock = threading.Lock()
-    _wa_state = {"agent": None, "sid": None}
+    _chat_lock = threading.Lock()
+    _chat_state = {}
 
-    @app.post("/api/whatsapp/inbound")
-    def whatsapp_inbound(body: _WAIn,
-                         authorization: str | None = Header(default=None)):
-        """Bridge -> agent. One persistent Agent + a 'WhatsApp' chat session."""
-        _bearer(authorization)
-        text = (body.text or "").strip()[:4000]
-        if not text:
-            return {"reply": "(empty message)"}
-        with _wa_lock:
-            if _wa_state["agent"] is None:
+    def _agent_reply(session_title: str, text: str) -> str:
+        """One agent turn for a chat channel, persisted under session_title."""
+        with _chat_lock:
+            st = _chat_state.get(session_title)
+            if st is None:
                 agent = Agent(confirm=None)   # gated tools deny without a prompt
                 sid = next((s["id"] for s in store.list_sessions()
-                            if s["title"] == "WhatsApp"), None)
+                            if s["title"] == session_title), None)
                 if not sid:
-                    sid = store.new_session("WhatsApp")["id"]
+                    sid = store.new_session(session_title)["id"]
                 hist = [{"role": m["role"], "content": m["content"]}
                         for m in store.get_messages(sid, limit=_MSG_WINDOW)]
                 if hist and agent.history:
                     agent.history = [agent.history[0], *hist]
-                _wa_state.update(agent=agent, sid=sid)
-            agent, sid = _wa_state["agent"], _wa_state["sid"]
+                st = {"agent": agent, "sid": sid}
+                _chat_state[session_title] = st
+            agent, sid = st["agent"], st["sid"]
             store.add_message(sid, "user", text)
             try:
                 reply = agent.ask(text)
             except Exception as e:
                 reply = f"error: {e}"
             store.add_message(sid, "assistant", reply)
-        return {"reply": reply}
+        return reply
+
+    def _wa_reply(sender: str, text: str) -> None:
+        reply = _agent_reply("WhatsApp", text)
+        try:
+            from .. import whatsapp
+            whatsapp.send(reply, to=sender)
+        except Exception:
+            _log.exception("whatsapp reply send failed")
+
+    def _telegram_reply(chat_id: str, text: str) -> str:
+        return _agent_reply("Telegram", text)
+
+    try:
+        from .. import telegram
+        telegram.start(_telegram_reply)
+    except Exception:
+        _log.exception("telegram polling failed to start")
+
+    @app.get("/api/whatsapp/webhook")
+    def wa_verify(request: Request):
+        """Meta webhook verification handshake."""
+        mode = request.query_params.get("hub.mode")
+        token = request.query_params.get("hub.verify_token") or ""
+        challenge = request.query_params.get("hub.challenge", "")
+        expected = config.get("JARVIS_WA_VERIFY_TOKEN")
+        if (mode == "subscribe" and expected
+                and secrets.compare_digest(token, expected)):
+            return PlainTextResponse(challenge)
+        raise HTTPException(status_code=403,
+                            detail="webhook verification failed")
+
+    @app.post("/api/whatsapp/webhook")
+    async def wa_webhook(request: Request, background: BackgroundTasks):
+        """Meta -> agent. Verifies X-Hub-Signature-256, replies immediately."""
+        raw = await request.body()
+        secret = config.get("JARVIS_WA_APP_SECRET")
+        if secret:
+            sig = request.headers.get("x-hub-signature-256", "")
+            want = "sha256=" + hmac.new(secret.encode(), raw,
+                                       hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(sig, want):
+                raise HTTPException(status_code=403, detail="bad signature")
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="bad json")
+        for sender, text in _wa_extract(payload):
+            background.add_task(_wa_reply, sender, text)
+        return {"status": "ok"}
 
     @app.patch("/api/jobs/{jid}")
     def jobs_patch(jid: str, body: _JobPatchIn,

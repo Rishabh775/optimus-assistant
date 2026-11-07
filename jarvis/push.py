@@ -30,7 +30,13 @@ def push_configured() -> bool:
         return True
     try:
         from . import whatsapp
-        return whatsapp.configured()
+        if whatsapp.configured():
+            return True
+    except Exception:
+        pass
+    try:
+        from . import telegram
+        return telegram.configured()
     except Exception:
         return False
 
@@ -74,6 +80,12 @@ def send(title: str, message: str) -> bool:
             sent = True
     except Exception:
         log.exception("whatsapp delivery failed")
+    try:
+        from . import telegram
+        if telegram.configured() and telegram.notify(title, message):
+            sent = True
+    except Exception:
+        log.exception("telegram delivery failed")
     return sent
 
 

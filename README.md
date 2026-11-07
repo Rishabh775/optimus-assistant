@@ -393,26 +393,26 @@ The composer has two extra buttons:
   server-side via the same faster-whisper model (`POST /api/transcribe`),
   then dropped into the message box for editing before sending.
 
-### WhatsApp channel (optional, unofficial)
+### Messaging channels (Telegram recommended, WhatsApp official)
 
-`whatsapp/` is a small Node bridge (whatsapp-web.js) that links as a WhatsApp
-Web device and connects to the agent:
+**Telegram** is the best fit for a personal assistant: official Bot API, free,
+no 24-hour window or templates, no public webhook (long polling), and inline
+buttons for approvals later. Setup:
 
-- **Notifications** (reminders, job alerts, briefings) are delivered to your
-  WhatsApp self-chat in addition to ntfy when `JARVIS_WHATSAPP_ENABLED=1`
-- **Chat**: message yourself on WhatsApp ("Message yourself") and the bridge
-  forwards it to the agent and replies in the same chat. Set
-  `JARVIS_WHATSAPP_ALLOW` to allow other numbers.
-- Only text is handled; gated tools (send email, run shell) are denied in this
-  channel because there is no interactive approval yet.
+1. Open Telegram → **@BotFather** → `/newbot` → pick a name/username
+2. Put the token in `JARVIS_TELEGRAM_BOT_TOKEN`, set `JARVIS_TELEGRAM_ENABLED=1`
+3. Restart `jarvis-server`, message the bot; it replies with your chat id
+4. Put that id in `JARVIS_TELEGRAM_ALLOW` and restart
 
-Setup: `npm install` in `whatsapp/` (done), then
-`systemctl --user start whatsapp-bridge`, open
-`http://<tailnet-ip>:9000/wa-qr.png` and scan with
-WhatsApp → Linked devices. Sessions persist in `whatsapp/.auth`.
+Then reminders, job alerts and briefings are delivered to Telegram, and you
+can chat with the agent there (history appears as a "Telegram" chat in the app).
 
-⚠️ Unofficial clients violate WhatsApp's ToS and can get a number banned.
-Use a secondary number if the primary one matters.
+**WhatsApp Cloud API** (official Meta route) is implemented too
+(`/api/whatsapp/webhook`), but it is heavier: Meta app + business number,
+public HTTPS webhook (Tailscale Funnel), and approved utility templates for
+proactive alerts outside the 24-hour window. Since Oct 2026 service replies are
+billed after 1,000 free messages/number/month. Enable with `JARVIS_WHATSAPP_ENABLED=1`
+once the Meta credentials are in `.env`.
 
 ### Native Android app
 

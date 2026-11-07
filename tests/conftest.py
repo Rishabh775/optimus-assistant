@@ -38,10 +38,15 @@ os.environ.update({
     "JARVIS_PERSONALITY": "off",
     # never let the real .env's WhatsApp bridge leak into tests
     "JARVIS_WHATSAPP_ENABLED": "0",
-    "JARVIS_WHATSAPP_BRIDGE_URL": "http://127.0.0.1:8090",
-    "JARVIS_WHATSAPP_BRIDGE_TOKEN": "",
-    "JARVIS_WHATSAPP_ALLOW": "",
-    "JARVIS_WHATSAPP_TO": "",
+    "JARVIS_WA_PHONE_ID": "",
+    "JARVIS_WA_TOKEN": "",
+    "JARVIS_WA_TO": "",
+    "JARVIS_WA_VERIFY_TOKEN": "",
+    "JARVIS_WA_APP_SECRET": "",
+    "JARVIS_WA_TEMPLATE_NOTIFY": "",
+    "JARVIS_TELEGRAM_ENABLED": "0",
+    "JARVIS_TELEGRAM_BOT_TOKEN": "",
+    "JARVIS_TELEGRAM_ALLOW": "",
 })
 
 

@@ -146,14 +146,20 @@ DEFAULTS = {
     # of the headless Playwright browser.
     "JARVIS_BROWSER_MCP_ENABLED": "1",
     "JARVIS_BROWSER_MCP_CMD": "npx -y @browsermcp/mcp@latest",
-    # WhatsApp channel via the local bridge (whatsapp/). Unofficial (ToS risk).
+    # WhatsApp Cloud API (official Meta Graph API; webhook + templates)
     "JARVIS_WHATSAPP_ENABLED": "0",
-    "JARVIS_WHATSAPP_BRIDGE_URL": "http://127.0.0.1:8090",
-    "JARVIS_WHATSAPP_BRIDGE_TOKEN": "",
-    # numbers allowed to chat (digits incl. country code); empty = self-chat
-    "JARVIS_WHATSAPP_ALLOW": "",
-    # where notifications go; empty = your own "message yourself" chat
-    "JARVIS_WHATSAPP_TO": "",
+    "JARVIS_WA_PHONE_ID": "",
+    "JARVIS_WA_TOKEN": "",
+    "JARVIS_WA_API_VERSION": "v23.0",
+    "JARVIS_WA_TO": "",
+    "JARVIS_WA_VERIFY_TOKEN": "",
+    "JARVIS_WA_APP_SECRET": "",
+    "JARVIS_WA_TEMPLATE_NOTIFY": "",
+    "JARVIS_WA_TEMPLATE_LANG": "en_US",
+    # Telegram Bot API (official, free, no templates/webhook)
+    "JARVIS_TELEGRAM_ENABLED": "0",
+    "JARVIS_TELEGRAM_BOT_TOKEN": "",
+    "JARVIS_TELEGRAM_ALLOW": "",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

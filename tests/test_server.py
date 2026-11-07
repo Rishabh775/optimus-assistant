@@ -413,7 +413,7 @@ def test_push_test_endpoint(client, monkeypatch):
     assert r.status_code == 200 and r.json() == {"ok": True}
 
 
-# ---- WhatsApp bridge inbound ----
+# ---- WhatsApp Cloud API webhook ----
 
 class _EchoAgent:
     history = []
@@ -425,22 +425,64 @@ class _EchoAgent:
         return f"echo {text}"
 
 
-def test_whatsapp_inbound_requires_token(client):
-    r = client.post("/api/whatsapp/inbound", json={"from": "91", "text": "hi"})
+PAYLOAD = {"object": "whatsapp_business_account", "entry": [{"changes": [{
+    "field": "messages", "value": {"messaging_product": "whatsapp",
+    "metadata": {"phone_number_id": "123"},
+    "messages": [{"from": "919999999999", "id": "wamid.1",
+                  "type": "text", "text": {"body": "ping"}}]}}]}]}
+
+
+def test_wa_extract_parses_text_only():
+    from jarvis.server.app import _wa_extract
+    payload = {"entry": [{"changes": [{"value": {"messages": [
+        {"from": "9199", "type": "text", "text": {"body": " hi "}},
+        {"from": "9199", "type": "image", "image": {}},
+    ]}}]}]}
+    assert _wa_extract(payload) == [("9199", "hi")]
+
+
+def test_wa_webhook_verification(client, monkeypatch):
+    monkeypatch.setenv("JARVIS_WA_VERIFY_TOKEN", "verify-me")
+    ok = client.get("/api/whatsapp/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "verify-me",
+        "hub.challenge": "42"})
+    assert ok.status_code == 200 and ok.text == "42"
+    bad = client.get("/api/whatsapp/webhook", params={
+        "hub.mode": "subscribe", "hub.verify_token": "nope",
+        "hub.challenge": "42"})
+    assert bad.status_code == 403
+
+
+def test_wa_webhook_signature(client, monkeypatch):
+    import hashlib
+    import hmac
+    import json
+    monkeypatch.setenv("JARVIS_WA_APP_SECRET", "appsecret")
+    raw = json.dumps(PAYLOAD).encode()
+    good = "sha256=" + hmac.new(b"appsecret", raw, hashlib.sha256).hexdigest()
+    r = client.post("/api/whatsapp/webhook", content=raw,
+                    headers={"content-type": "application/json",
+                             "x-hub-signature-256": good})
+    assert r.status_code == 200
+    r = client.post("/api/whatsapp/webhook", content=raw,
+                    headers={"content-type": "application/json",
+                             "x-hub-signature-256": "sha256=bad"})
     assert r.status_code == 403
 
 
-def test_whatsapp_inbound_replies_and_stores_chat(client, monkeypatch):
+def test_wa_webhook_replies_and_stores(client, monkeypatch):
+    monkeypatch.setenv("JARVIS_WA_APP_SECRET", "")
     monkeypatch.setattr(srv, "Agent", _EchoAgent)
-    r = client.post("/api/whatsapp/inbound", headers=_auth(client),
-                    json={"from": "919999999999", "name": "Rishabh",
-                          "text": "what's up"})
+    import jarvis.whatsapp as wa
+    sent = []
+    monkeypatch.setattr(wa, "send",
+                        lambda text, to="": sent.append((to, text)) or True)
+    r = client.post("/api/whatsapp/webhook", json=PAYLOAD)
     assert r.status_code == 200
-    assert r.json() == {"reply": "echo what's up"}
+    assert sent == [("919999999999", "echo ping")]
 
     sessions = client.get("/api/sessions", headers=_auth(client)).json()
-    wa = next(s for s in sessions if s["title"] == "WhatsApp")
-    msgs = client.get(f"/api/sessions/{wa['id']}/messages",
+    wa_chat = next(x for x in sessions if x["title"] == "WhatsApp")
+    msgs = client.get(f"/api/sessions/{wa_chat['id']}/messages",
                       headers=_auth(client)).json()
     assert [m["role"] for m in msgs] == ["user", "assistant"]
-    assert msgs[0]["content"] == "what's up"
