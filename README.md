@@ -104,7 +104,7 @@ Delivery chain upon a fire:
 The scheduler also supports once-per-day jobs, persisted across reboots (`daily_runs` table). The built-in one is the morning briefing:
 
 - enable with `JARVIS_BRIEFING_TIME=07:30` (local time; empty = off)
-- content: weather + today's calendar + top unread email triage + today's reminders
+- content: weather + today's calendar + top unread email triage + today's reminders + **new jobs** (top 4 by score, with the count)
 - every section degrades quietly when its integration is unconfigured or down — a dead IMAP server can't kill the briefing
 - delivery: ntfy push + speaker announcement (voice modes) + phone-app WS in a later phase
 - on demand: the agent has the `daily_briefing` tool for "brief me" / "how's my day"
@@ -373,6 +373,8 @@ The rail header has two one-tap actions:
   Fired reminders appear live as in-chat notes on any open chat.
 - **☀️ Brief me** — composes the daily briefing instantly (weather +
   calendar + email + reminders; sections skip what is unconfigured).
+
+The reminders sheet has **Send test notification** (posts `/api/push/test`) to verify ntfy delivery, and the briefing now lists new job matches.
 
 REST endpoints backing these: `GET/POST /api/reminders`,
 `DELETE /api/reminders/{id}`, `POST /api/briefing` (all token-gated).

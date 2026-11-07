@@ -212,6 +212,9 @@
   .rform input:focus,.rform select:focus{border-color:var(--accent)}
   .rform input.wide{flex:2 1 100%}
   .rform button{border-radius:10px}
+  .ghostbtn{width:100%;margin-top:10px;background:var(--panel2);
+            border:1px solid var(--line);color:var(--text);padding:10px;
+            border-radius:10px;font-size:13px}
   .rhint{color:var(--dim);font-size:11px;margin-top:8px}
   /* jobs panel */
   .jrow{display:flex;gap:9px;align-items:flex-start;padding:10px 4px;border-bottom:1px solid var(--line)}
@@ -329,6 +332,7 @@
       <button id="radd" type="button">Add</button>
     </div>
     <div class="rhint">When: "in 20 minutes", "15:30", or ISO "2026-10-25T07:30" · repeats daily/weekly</div>
+    <button id="rtest" type="button" class="ghostbtn">Send test notification</button>
   </div>
 </div>
 
@@ -694,6 +698,19 @@
       replyInSheet('failed to load: ' + e.message);
     });
   }
+
+  $('#rtest').onclick = function () {
+    fetch('/api/push/test', { method: 'POST', headers: headers() })
+      .then(function (r) {
+        return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+      })
+      .then(function (res) {
+        replyInSheet(res.ok ? 'test notification sent — check your phone'
+                            : 'push failed: ' + (res.j.detail || 'unknown'));
+      }).catch(function (e) {
+        replyInSheet('push failed: ' + e.message);
+      });
+  };
 
   $('#radd').onclick = function () {
     var m = $('#rmsg').value.trim(), at = $('#rat').value.trim(), rep = $('#rrep').value;

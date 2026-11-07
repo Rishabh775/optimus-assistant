@@ -397,3 +397,17 @@ def test_jobs_min_score_filter(client):
     assert client.get("/api/jobs?min_score=500",
                       headers=_auth(client)).status_code == 400
     assert client.get("/api/jobs/stats", headers=_auth(client)).json()["min_score"] == 25
+
+
+def test_push_test_endpoint(client, monkeypatch):
+    import jarvis.server.app as srv
+    monkeypatch.setattr(srv.push, "push_configured", lambda: False)
+    assert client.post("/api/push/test", headers=_auth(client)).status_code == 400
+
+    monkeypatch.setattr(srv.push, "push_configured", lambda: True)
+    monkeypatch.setattr(srv.push, "send", lambda t, m: False)
+    assert client.post("/api/push/test", headers=_auth(client)).status_code == 502
+
+    monkeypatch.setattr(srv.push, "send", lambda t, m: True)
+    r = client.post("/api/push/test", headers=_auth(client))
+    assert r.status_code == 200 and r.json() == {"ok": True}

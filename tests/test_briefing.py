@@ -48,6 +48,8 @@ GEO = [{"name": "Hyderabad", "country": "India",
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("JARVIS_REMINDER_DB", str(tmp_path / "r.db"))
+    monkeypatch.setenv("JARVIS_JOBS_DB", str(tmp_path / "jobs.db"))
+    monkeypatch.setenv("JARVIS_JOBS_PROFILE", str(tmp_path / "profile.json"))
     old = list(scheduler._LISTENERS)
     scheduler._LISTENERS.clear()
     for k in ("JARVIS_LAT", "JARVIS_LON", "JARVIS_WEATHER_CITY",
@@ -209,3 +211,15 @@ def test_daily_tool_wiring():
     names = {s["name"] for s in TOOL_SCHEMAS}
     for n in ("weather", "daily_briefing"):
         assert n in names and n in TOOL_FUNCS
+
+
+def test_build_includes_jobs_section(monkeypatch):
+    from jarvis.jobs import profile as jp
+    from jarvis.jobs import tracker as jt
+    monkeypatch.setenv("JARVIS_JOBS_MIN_SCORE", "0")
+    jp.update({"roles": ["frontend engineer"]})
+    jt.upsert({"source": "test", "company": "Acme",
+               "title": "Frontend Engineer", "url": "https://x/j1",
+               "score": 80, "score_notes": "title match"})
+    out = briefing.build()
+    assert "Jobs (1 new)" in out and "Acme — Frontend Engineer" in out

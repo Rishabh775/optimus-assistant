@@ -65,10 +65,10 @@ def test_send_posts_json_with_title_and_priority(monkeypatch):
     monkeypatch.setenv("JARVIS_NTFY_TOPIC", "secret-ch")
     assert push.send("Reminder", "water the plants") is True
     c = rec.calls[0]
-    assert c["url"] == "https://ntfy.sh/secret-ch"
+    assert c["url"] == "https://ntfy.sh/"   # JSON publish -> server root
     assert c["body"] == {"topic": "secret-ch", "title": "Reminder",
                          "message": "water the plants",
-                         "priority": "high", "tags": ["bell"]}
+                         "priority": 4, "tags": ["bell"]}
     assert "Authorization" not in c["headers"]      # no token configured
 
 
@@ -80,7 +80,7 @@ def test_send_with_token(monkeypatch):
     monkeypatch.setenv("JARVIS_NTFY_TOKEN", "tk_secret")
     assert push.send("t", "m") is True
     assert rec.calls[0]["headers"]["Authorization"] == "Bearer tk_secret"
-    assert rec.calls[0]["url"] == "http://100.115.236.88:2580/ch"  # rstrip '/'
+    assert rec.calls[0]["url"] == "http://100.115.236.88:2580/"  # root + slash
 
 
 def test_send_failure_is_swallowed(monkeypatch):

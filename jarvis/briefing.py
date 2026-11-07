@@ -154,6 +154,22 @@ def build() -> str:
             lines += ["--- Reminders today", rl, ""]
     except Exception as e:
         log.debug("reminders section skipped: %s", e)
+
+    try:
+        from .jobs import profile as _jprof, tracker as _jtracker
+        if _jprof.load().get("roles"):
+            floor = config.get_float("JARVIS_JOBS_MIN_SCORE")
+            jobs = _jtracker.list_jobs(status="new", limit=40,
+                                       min_score=floor)
+            if jobs:
+                top = "\n".join(
+                    f"- [{j['score']:.0f}] {j['company']} — {j['title']}"
+                    + (f" ({j['location']})" if j["location"] else "")
+                    for j in jobs[:4])
+                lines += [f"--- Jobs ({len(jobs)} new)", top,
+                          "Open the Jobs panel for links.", ""]
+    except Exception as e:
+        log.debug("jobs section skipped: %s", e)
     out = "\n".join(ln for ln in lines if ln is not None).strip()
     return out or f"{_greeting()}. All quiet today -- nothing scheduled."
 

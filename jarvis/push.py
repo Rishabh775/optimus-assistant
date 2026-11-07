@@ -29,21 +29,22 @@ def push_configured() -> bool:
 
 
 def _post(url: str, topic: str, title: str, message: str,
-          token: str = "", timeout: float = 5.0) -> None:
+          token: str = "", timeout: float = 10.0) -> None:
     """POST one ntfy message (JSON body so title/priority ride along)."""
     body = json.dumps({
         "topic": topic,
         "title": title,
         "message": message,
-        "priority": "high",
+        "priority": 4,
         "tags": ["bell"],
     }).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    # JSON publishing must go to the server root (with trailing slash);
+    # /<topic> or a slash-less root makes ntfy reject or mis-parse it.
     req = urllib.request.Request(
-        f"{url.rstrip('/')}/{topic}", data=body, headers=headers,
-        method="POST")
+        f"{url.rstrip('/')}/", data=body, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         resp.read()
 

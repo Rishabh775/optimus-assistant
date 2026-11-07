@@ -313,6 +313,20 @@ def create_app() -> FastAPI:
         return {"ok": True, "found": result["found"],
                 "inserted": result["inserted"]}
 
+    @app.post("/api/push/test")
+    def push_test(authorization: str | None = Header(default=None)):
+        """Send a test notification so the user can verify their phone."""
+        _bearer(authorization)
+        if not push.push_configured():
+            raise HTTPException(
+                status_code=400,
+                detail="push not configured (JARVIS_NTFY_URL / JARVIS_NTFY_TOPIC)")
+        if not push.send("Soundwave test",
+                         "Notifications are working. This is a test from your phone."):
+            raise HTTPException(status_code=502,
+                                detail="ntfy rejected the push — check URL/topic")
+        return {"ok": True}
+
     @app.patch("/api/jobs/{jid}")
     def jobs_patch(jid: str, body: _JobPatchIn,
                    authorization: str | None = Header(default=None)):
