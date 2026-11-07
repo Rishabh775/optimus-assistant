@@ -142,6 +142,10 @@ DEFAULTS = {
     # vision: photo/screenshot understanding for phone uploads
     "JARVIS_VISION_MODEL": "gpt-6-luna",
     "JARVIS_VISION_MAX_MB": "12",
+    # Browser MCP: drive the user's real Chrome (extension) instead
+    # of the headless Playwright browser.
+    "JARVIS_BROWSER_MCP_ENABLED": "1",
+    "JARVIS_BROWSER_MCP_CMD": "npx -y @browsermcp/mcp@latest",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

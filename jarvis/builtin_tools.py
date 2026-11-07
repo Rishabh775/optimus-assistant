@@ -129,6 +129,14 @@ def needs_confirmation(fn_name: str, args: dict) -> str | None:
         if str(args.get("key", "")).strip().lower() in ("enter", "return"):
             return "submit a web form (press Enter)"
         return None
+    if fn_name == "browser_mcp":
+        cmds = str(args.get("commands", ""))
+        m = re.search(r"(?im)^\s*(click|type|press|select|upload|check|"
+                      r"submit|fill|choose)\b", cmds)
+        if m:
+            return (f"control your real Chrome ({m.group(1).lower()} – "
+                    "click/type/submit in a logged-in browser)")
+        return None
     if fn_name == "write_file":
         p = _resolve_write(args.get("path", ""))
         if _outside_workspace(p):
@@ -342,6 +350,15 @@ def browser_scroll(direction: str = "down", amount: int = 800) -> str:
 def browser_close() -> str:
     from .tools.browser import web_close
     return web_close()
+
+
+def browser_mcp(commands: str) -> str:
+    """Drive the user's real Chrome via the Browser MCP extension."""
+    from .tools.browser_mcp import run
+    try:
+        return run(commands)
+    except (ValueError, RuntimeError) as e:
+        return f"error: {e}"
 
 
 def email_list(n: int = 10, unread_only: bool = False) -> str:
@@ -709,6 +726,22 @@ TOOL_SCHEMAS = [
         "parameters": {"type": "object", "properties": {}},
     },
     {
+        "name": "browser_mcp",
+        "description": ("Control the user's REAL Chrome (logged-in sessions) "
+                        "via Browser MCP. One command per line, batched: "
+                        "'navigate <url>', 'snapshot -i', 'click @e12', "
+                        "'type <text>', 'press Enter', 'get text --max all'. "
+                        "Use this instead of the headless browser tools when "
+                        "a site requires the user's login. Requires the "
+                        "Browser MCP extension to be connected. Never bulk-"
+                        "automate LinkedIn/Indeed/Naukri."),
+        "parameters": {
+            "type": "object",
+            "properties": {"commands": {"type": "string"}},
+            "required": ["commands"],
+        },
+    },
+    {
         "name": "email_triage",
         "description": "Rank recent emails by deterministic importance (VIP senders + keyword weights) and explain why. Use for 'what's important in my email'.",
         "parameters": {
@@ -935,6 +968,7 @@ TOOL_FUNCS = {
     "browser_wait": browser_wait,
     "browser_scroll": browser_scroll,
     "browser_close": browser_close,
+    "browser_mcp": browser_mcp,
     "email_list": email_list,
     "email_triage": email_triage,
     "email_read": email_read,

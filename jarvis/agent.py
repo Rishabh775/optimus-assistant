@@ -113,6 +113,7 @@ Tools available:
 - shell_run / read_file / write_file: local system
 - web_search / browser_open / browser_extract / browser_screenshot: web
 - browser_click / browser_type / browser_press / browser_back / browser_links / browser_wait / browser_scroll / browser_close: drive a real headless browser (navigate, click, fill forms, submit). Use browser_links to see what's clickable.
+- browser_mcp: control the user's REAL Chrome via Browser MCP (logged-in sessions). One command per line, batched: navigate, snapshot -i, click @ref, type ..., press Enter, get text. Use when a site needs the user's login; never bulk-automate LinkedIn/Indeed/Naukri.
 - email_triage / email_list / email_read / email_send / email_unread_count: email (IMAP/SMTP)
 - calendar_list / calendar_today / calendar_add: calendar (CalDAV)
 - ha_list_entities / ha_state / ha_call / ha_search: Home Assistant REST

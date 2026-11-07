@@ -38,7 +38,7 @@ python -m jarvis --query "..."    # one-shot
 
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
-## Tools (49)
+## Tools (50)
 
 | Tool | What |
 |---|---|
@@ -48,6 +48,7 @@ python -m jarvis --query "..."    # one-shot
 | `shell_run`, `read_file`, `write_file` | local system |
 | `web_search`, `browser_open`, `browser_extract`, `browser_screenshot` | web |
 | `browser_click`, `browser_type`, `browser_press`, `browser_back`, `browser_links`, `browser_wait`, `browser_scroll`, `browser_close` | drive a real headless browser (click/type/submit); `browser_type` + Enter are confirmation-gated |
+| `browser_mcp` | control the user's **real Chrome** through Browser MCP (logged-in sessions); batched commands (`navigate`, `snapshot -i`, `click`, `type`, `press`, `get text`); click/type/submit are confirmation-gated; requires the Browser MCP extension |
 | `email_triage` | rank emails by importance (VIP senders + keywords) |
 | `email_list`, `email_read`, `email_send`, `email_unread_count` | email (IMAP/SMTP) |
 | `calendar_list`, `calendar_today`, `calendar_add` | calendar (CalDAV) |
