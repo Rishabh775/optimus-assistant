@@ -393,6 +393,27 @@ The composer has two extra buttons:
   server-side via the same faster-whisper model (`POST /api/transcribe`),
   then dropped into the message box for editing before sending.
 
+### WhatsApp channel (optional, unofficial)
+
+`whatsapp/` is a small Node bridge (whatsapp-web.js) that links as a WhatsApp
+Web device and connects to the agent:
+
+- **Notifications** (reminders, job alerts, briefings) are delivered to your
+  WhatsApp self-chat in addition to ntfy when `JARVIS_WHATSAPP_ENABLED=1`
+- **Chat**: message yourself on WhatsApp ("Message yourself") and the bridge
+  forwards it to the agent and replies in the same chat. Set
+  `JARVIS_WHATSAPP_ALLOW` to allow other numbers.
+- Only text is handled; gated tools (send email, run shell) are denied in this
+  channel because there is no interactive approval yet.
+
+Setup: `npm install` in `whatsapp/` (done), then
+`systemctl --user start whatsapp-bridge`, open
+`http://<tailnet-ip>:9000/wa-qr.png` and scan with
+WhatsApp → Linked devices. Sessions persist in `whatsapp/.auth`.
+
+⚠️ Unofficial clients violate WhatsApp's ToS and can get a number banned.
+Use a secondary number if the primary one matters.
+
 ### Native Android app
 
 `mobile/` is a Capacitor shell around this same UI: real launcher icon,

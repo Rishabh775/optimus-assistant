@@ -411,3 +411,36 @@ def test_push_test_endpoint(client, monkeypatch):
     monkeypatch.setattr(srv.push, "send", lambda t, m: True)
     r = client.post("/api/push/test", headers=_auth(client))
     assert r.status_code == 200 and r.json() == {"ok": True}
+
+
+# ---- WhatsApp bridge inbound ----
+
+class _EchoAgent:
+    history = []
+
+    def __init__(self, confirm=None):
+        self.confirm = confirm
+
+    def ask(self, text, max_steps=None, on_delta=None):
+        return f"echo {text}"
+
+
+def test_whatsapp_inbound_requires_token(client):
+    r = client.post("/api/whatsapp/inbound", json={"from": "91", "text": "hi"})
+    assert r.status_code == 403
+
+
+def test_whatsapp_inbound_replies_and_stores_chat(client, monkeypatch):
+    monkeypatch.setattr(srv, "Agent", _EchoAgent)
+    r = client.post("/api/whatsapp/inbound", headers=_auth(client),
+                    json={"from": "919999999999", "name": "Rishabh",
+                          "text": "what's up"})
+    assert r.status_code == 200
+    assert r.json() == {"reply": "echo what's up"}
+
+    sessions = client.get("/api/sessions", headers=_auth(client)).json()
+    wa = next(s for s in sessions if s["title"] == "WhatsApp")
+    msgs = client.get(f"/api/sessions/{wa['id']}/messages",
+                      headers=_auth(client)).json()
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "what's up"

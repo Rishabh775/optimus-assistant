@@ -146,6 +146,14 @@ DEFAULTS = {
     # of the headless Playwright browser.
     "JARVIS_BROWSER_MCP_ENABLED": "1",
     "JARVIS_BROWSER_MCP_CMD": "npx -y @browsermcp/mcp@latest",
+    # WhatsApp channel via the local bridge (whatsapp/). Unofficial (ToS risk).
+    "JARVIS_WHATSAPP_ENABLED": "0",
+    "JARVIS_WHATSAPP_BRIDGE_URL": "http://127.0.0.1:8090",
+    "JARVIS_WHATSAPP_BRIDGE_TOKEN": "",
+    # numbers allowed to chat (digits incl. country code); empty = self-chat
+    "JARVIS_WHATSAPP_ALLOW": "",
+    # where notifications go; empty = your own "message yourself" chat
+    "JARVIS_WHATSAPP_TO": "",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

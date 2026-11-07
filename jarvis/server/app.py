@@ -18,6 +18,7 @@ Agent pipeline to a phone (PWA) over the tailnet / LAN:
     POST /api/briefing            composed daily briefing (sync in pool)
     POST /api/upload              multipart file (photo/doc) -> saved path
     POST /api/transcribe          multipart audio (voice note) -> text (STT)
+    POST /api/whatsapp/inbound    bridge -> agent reply (WhatsApp channel)
     GET  /api/jobs                tracked jobs (optional ?status=)
     GET  /api/jobs/stats          counts per status
     GET  /api/jobs/profile        job-search profile + configured flag
@@ -49,6 +50,7 @@ import re
 import secrets
 import socket
 import tempfile
+import threading
 import time
 import uuid
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
@@ -61,7 +63,7 @@ from fastapi.websockets import WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import config
 from .. import briefing, jobs, push, scheduler
@@ -145,6 +147,12 @@ class _ReminderIn(BaseModel):
 class _JobPatchIn(BaseModel):
     status: str
     note: str = ""
+
+
+class _WAIn(BaseModel):
+    sender: str = Field(alias="from")
+    name: str = ""
+    text: str
 
 
 def create_app() -> FastAPI:
@@ -320,12 +328,46 @@ def create_app() -> FastAPI:
         if not push.push_configured():
             raise HTTPException(
                 status_code=400,
-                detail="push not configured (JARVIS_NTFY_URL / JARVIS_NTFY_TOPIC)")
+                detail="push not configured (ntfy or WhatsApp)")
         if not push.send("Soundwave test",
                          "Notifications are working. This is a test from your phone."):
             raise HTTPException(status_code=502,
                                 detail="ntfy rejected the push — check URL/topic")
         return {"ok": True}
+
+    # ---- WhatsApp channel (bridge is the whatsapp/ Node service) ----
+
+    _wa_lock = threading.Lock()
+    _wa_state = {"agent": None, "sid": None}
+
+    @app.post("/api/whatsapp/inbound")
+    def whatsapp_inbound(body: _WAIn,
+                         authorization: str | None = Header(default=None)):
+        """Bridge -> agent. One persistent Agent + a 'WhatsApp' chat session."""
+        _bearer(authorization)
+        text = (body.text or "").strip()[:4000]
+        if not text:
+            return {"reply": "(empty message)"}
+        with _wa_lock:
+            if _wa_state["agent"] is None:
+                agent = Agent(confirm=None)   # gated tools deny without a prompt
+                sid = next((s["id"] for s in store.list_sessions()
+                            if s["title"] == "WhatsApp"), None)
+                if not sid:
+                    sid = store.new_session("WhatsApp")["id"]
+                hist = [{"role": m["role"], "content": m["content"]}
+                        for m in store.get_messages(sid, limit=_MSG_WINDOW)]
+                if hist and agent.history:
+                    agent.history = [agent.history[0], *hist]
+                _wa_state.update(agent=agent, sid=sid)
+            agent, sid = _wa_state["agent"], _wa_state["sid"]
+            store.add_message(sid, "user", text)
+            try:
+                reply = agent.ask(text)
+            except Exception as e:
+                reply = f"error: {e}"
+            store.add_message(sid, "assistant", reply)
+        return {"reply": reply}
 
     @app.patch("/api/jobs/{jid}")
     def jobs_patch(jid: str, body: _JobPatchIn,

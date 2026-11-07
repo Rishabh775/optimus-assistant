@@ -25,7 +25,14 @@ log = _mk_log("push")
 
 
 def push_configured() -> bool:
-    return bool(config.get("JARVIS_NTFY_URL") and config.get("JARVIS_NTFY_TOPIC"))
+    """True when at least one delivery channel (ntfy or WhatsApp) is set up."""
+    if config.get("JARVIS_NTFY_URL") and config.get("JARVIS_NTFY_TOPIC"):
+        return True
+    try:
+        from . import whatsapp
+        return whatsapp.configured()
+    except Exception:
+        return False
 
 
 def _post(url: str, topic: str, title: str, message: str,
@@ -50,18 +57,24 @@ def _post(url: str, topic: str, title: str, message: str,
 
 
 def send(title: str, message: str) -> bool:
-    """Push one notification. Returns True when a push was sent."""
-    if not push_configured():
-        return False
+    """Deliver one notification through every configured channel."""
+    sent = False
+    if push_configured():
+        try:
+            _post(config.get("JARVIS_NTFY_URL"),
+                  config.get("JARVIS_NTFY_TOPIC"),
+                  title, message,
+                  token=config.get("JARVIS_NTFY_TOKEN"))
+            sent = True
+        except Exception as e:
+            log.warning("ntfy push failed: %s", e)
     try:
-        _post(config.get("JARVIS_NTFY_URL"),
-              config.get("JARVIS_NTFY_TOPIC"),
-              title, message,
-              token=config.get("JARVIS_NTFY_TOKEN"))
-        return True
-    except Exception as e:
-        log.warning("ntfy push failed: %s", e)
-        return False
+        from . import whatsapp
+        if whatsapp.configured() and whatsapp.notify(title, message):
+            sent = True
+    except Exception:
+        log.exception("whatsapp delivery failed")
+    return sent
 
 
 # ------------------------------------------------------------ listeners ---
