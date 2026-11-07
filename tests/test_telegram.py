@@ -87,3 +87,54 @@ def test_push_falls_back_to_telegram(monkeypatch):
     assert push.push_configured() is True
     assert push.send("Reminder", "stand up") is True
     assert sent == [("Reminder", "stand up")]
+
+
+def test_send_retries_transient_failure(monkeypatch):
+    calls = {"n": 0}
+    rec = Recorder()
+
+    def flaky(req, timeout=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("reset")
+        return rec(req, timeout)
+
+    monkeypatch.setattr(telegram.urllib.request, "urlopen", flaky)
+    _enable(monkeypatch)
+    assert telegram.send("hi") is True
+    assert calls["n"] == 2 and len(rec.calls) == 1
+
+
+def test_ask_confirmation_buttons_and_callback(monkeypatch):
+    sent = []
+    monkeypatch.setattr(telegram, "send",
+                        lambda text, chat_id="", reply_markup=None:
+                        sent.append(reply_markup) or True)
+    telegram._pending.clear()
+    result = telegram.ask_confirmation("42", "run a shell command",
+                                       "shell_run", {}, False, timeout=0.05)
+    assert result is False                       # timed out
+    assert sent and sent[0]["inline_keyboard"][0][0]["callback_data"].startswith("ok:")
+    assert sent[0]["inline_keyboard"][0][1]["text"].endswith("Deny")
+    telegram._pending.clear()
+
+
+def test_resolve_callback_marks_result():
+    import threading
+    ev = threading.Event()
+    box = {"value": False}
+    telegram._pending["c9"] = (ev, box)
+    assert telegram._resolve_callback("ok:c9") == "approved"
+    assert ev.is_set() and box["value"] is True
+    assert telegram._resolve_callback("no:missing") is None
+    telegram._pending.clear()
+
+
+def test_push_telegram_only_when_ntfy_cleared(monkeypatch):
+    # push_configured is true via Telegram even with no ntfy env
+    sent = []
+    monkeypatch.setattr(telegram, "configured", lambda: True)
+    monkeypatch.setattr(telegram, "notify",
+                        lambda t, m: sent.append((t, m)) or True)
+    assert push.send("hi", "there") is True
+    assert sent == [("hi", "there")]

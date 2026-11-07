@@ -354,12 +354,13 @@ def create_app() -> FastAPI:
     _chat_lock = threading.Lock()
     _chat_state = {}
 
-    def _agent_reply(session_title: str, text: str) -> str:
+    def _agent_reply(session_title: str, text: str,
+                     confirm=None) -> str:
         """One agent turn for a chat channel, persisted under session_title."""
         with _chat_lock:
             st = _chat_state.get(session_title)
             if st is None:
-                agent = Agent(confirm=None)   # gated tools deny without a prompt
+                agent = Agent(confirm=confirm)
                 sid = next((s["id"] for s in store.list_sessions()
                             if s["title"] == session_title), None)
                 if not sid:
@@ -371,6 +372,7 @@ def create_app() -> FastAPI:
                 st = {"agent": agent, "sid": sid}
                 _chat_state[session_title] = st
             agent, sid = st["agent"], st["sid"]
+            agent.confirm = confirm
             store.add_message(sid, "user", text)
             try:
                 reply = agent.ask(text)
@@ -388,7 +390,13 @@ def create_app() -> FastAPI:
             _log.exception("whatsapp reply send failed")
 
     def _telegram_reply(chat_id: str, text: str) -> str:
-        return _agent_reply("Telegram", text)
+        from .. import telegram as tg
+
+        def confirm(reason, fn_name, args, mandatory=False):
+            return tg.ask_confirmation(chat_id, reason, fn_name, args,
+                                       mandatory)
+
+        return _agent_reply("Telegram", text, confirm=confirm)
 
     try:
         from .. import telegram
