@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Soundwave TUI launcher — works from any directory.
+set -euo pipefail
+ROOT="${SOUNDWAVE_ROOT:-$HOME/jarvis}"
+PY="$ROOT/.venv/bin/python"
+cd "$ROOT"
+if ! "$PY" -c "import textual" >/dev/null 2>&1; then
+  echo "Textual is missing; starting text mode instead." >&2
+  echo "Install TUI deps: $PY -m pip install -r $ROOT/requirements-tui.txt" >&2
+  exec "$PY" -m jarvis --mode text "$@"
+fi
+exec "$PY" -m jarvis.tui_main "$@"

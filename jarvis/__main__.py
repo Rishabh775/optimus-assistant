@@ -1,6 +1,7 @@
 """Optimus main entrypoint with multiple interaction modes."""
 import os
 import random
+import sys
 import warnings
 import threading
 import argparse
@@ -422,9 +423,12 @@ def main():
     p = argparse.ArgumentParser(prog="optimus")
     p.add_argument("--mode",
                    choices=["text", "voice", "hotkey", "wake", "tui"],
-                   default="text")
+                   default=None)
     p.add_argument("--query", help="one-shot query")
     args = p.parse_args()
+    if args.mode is None:
+        # interactive terminal -> TUI; pipes/cron stay in text mode
+        args.mode = "tui" if sys.stdout.isatty() else "text"
 
     for problem in config.validate():
         console.print(f"[yellow]config warning:[/yellow] {problem}")
@@ -441,9 +445,15 @@ def main():
     jobs.install()
 
     if args.mode == "tui":
-        from .tui import run_tui
-        run_tui()
-        return
+        try:
+            from .tui import run_tui
+        except ImportError as e:
+            print(f"TUI dependencies missing ({e}); falling back to text mode.\n"
+                  f"Install them with: pip install -r requirements-tui.txt")
+            args.mode = "text"
+        else:
+            run_tui()
+            return
 
     print(f"reminders: scheduler up (push {'on' if pushed else 'off'})")
 

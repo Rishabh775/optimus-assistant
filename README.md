@@ -36,6 +36,36 @@ cp .env.example .env                     # then fill in keys
 
 The wake-word verifier for "hey soundwave" (plus "hey optimus" and "optimus") is bundled in `wake_models/` and installed into the openwakeword package by the step above. To retrain, see `data/openWakeWord/` (scripts `gen_positive.py` + `train_optimus.py`).
 
+## Launch (from anywhere)
+
+```bash
+soundwave          # Soundwave TUI (installed launcher, works from ~ or any dir)
+soundwave-cli      # backup: plain text mode (no Textual needed)
+soundwave --check  # verify imports/config/memory without opening the UI
+```
+
+`soundwave` is a small launcher in `~/jarvis/bin/` (symlinked into `~/.local/bin`).
+It `cd`s into the repo first — running `python -m jarvis` from `~` fails because
+Python treats `~/jarvis` (the folder) as a namespace package.
+
+From inside the repo, `python -m jarvis` now opens the **TUI by default on a
+terminal**; non-interactive/piped runs stay in text mode, and `--mode text`
+forces the fallback. If Textual is missing, the launcher falls back to text.
+
+### Herdr
+
+Herdr is a terminal workspace for coding agents — it hosts terminals, it is
+not a replacement chat UI. Our TUI runs normally inside a Herdr pane:
+
+```bash
+herdr            # then inside a pane:
+soundwave
+```
+
+Herdr will show it as a regular terminal pane. If you want Herdr's
+working/blocked/idle badges for Soundwave, that needs OSC 7501 status reporting
+(not wired yet — ask and I'll add it).
+
 ## Run
 
 ```bash
