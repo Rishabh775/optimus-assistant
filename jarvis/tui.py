@@ -1,14 +1,10 @@
-"""Full-screen terminal UI for Optimus.
+"""Soundwave terminal UI (Textual).
 
-A thin frontend over the same Agent pipeline as the text/voice modes:
+A voice-first frontend over the same Agent pipeline as the other modes.
+Design: a quiet "instrument console" — near-black surfaces, one teal
+accent, a channel rail on the left, and streaming answers as markdown.
 
-  - streaming answers (on_delta) rendered as Markdown
-  - live route status
-  - confirmation dialogs for consequential tool calls
-  - proactive reminder notes from the background scheduler
-  - slash commands (/help, /auto, /briefing, /reminders, /jobs, ...)
-
-Run with: python -m jarvis --mode tui
+Run with: python -m jarvis.tui_main  (or python -m jarvis --mode tui)
 """
 import json
 import logging
@@ -21,50 +17,71 @@ from rich.markup import escape
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Markdown, Static
+from textual.theme import Theme
+from textual.widgets import Button, Input, Markdown, Static
 
 from . import config, scheduler
 
 log = logging.getLogger("soundwave.tui")
 
-_HELP = """**Optimus TUI**
+# Brand palette — matches the phone app (teal on near-black), not the
+# stock blue/purple TUI defaults.
+_SOUNDWAVE_THEME = Theme(
+    name="soundwave",
+    primary="#35d0ba",
+    secondary="#4aa8ff",
+    accent="#35d0ba",
+    foreground="#e8ecf4",
+    background="#0f1115",
+    surface="#151922",
+    panel="#1b2230",
+    dark=True,
+    variables={
+        "text-muted": "#8b94a7",
+        "warning": "#ffb454",
+        "error": "#ff6b6b",
+        "success": "#35d0ba",
+        "boost": "#1c2230",
+        "line": "#232b3a",
+    },
+)
 
-Type a question and press Enter. Responses stream in below your question.
-Tool calls run quietly in the background unless they need confirmation.
+_HELP = """**Soundwave**
 
-**Slash commands**
-- `/help` - this help
-- `/wake [on|off]` - wake-word voice loop (F4); `/voice on|off` - spoke replies (F3)
-- `/auto [on|off]` - toggle confirmation mode
-- `/status` - current config + pending reminders
-- `/reminders` - list pending reminders
-- `/briefing` - build the daily briefing now
-- `/jobs` - job pipeline summary
-- `/clear` - clear the transcript
-- `/new` - start a fresh conversation (keeps durable memory)
-- `/quit` - exit
+Type a message and press Enter. Answers stream below your question. Tool
+calls run quietly in the background unless they need approval.
+
+**Commands**
+- `/help` — this guide
+- `/briefing` — the daily briefing now
+- `/jobs` — job pipeline summary
+- `/reminders` — pending reminders
+- `/status` — configuration and memory
+- `/auto [on|off]` — toggle confirmations
+- `/voice [on|off]` — spoken replies for typed messages
+- `/wake [on|off]` — the wake-word voice loop
+- `/new` — fresh conversation · `/clear` — clear the transcript
+- `/quit` — exit
 
 **Keys**
-- `Ctrl+Q` quit
-- `Ctrl+L` clear transcript
-- `Ctrl+N` new conversation
-- `Ctrl+T` toggle confirmations
-- `Ctrl+R` reminders
-- `F1` help
+`Enter` send · `F2` push-to-talk · `F3` voice · `F4` wake · `Esc` stop speech
+`Ctrl+Q` quit · `Ctrl+L` clear · `Ctrl+N` new · `Ctrl+T` confirmations
+`Ctrl+R` reminders · `F1` help
 """
 
-_TOOL_COLORS = {
-    "note": "yellow",
-    "error": "red",
-    "reminder": "yellow",
+_EVENT_STYLES = {
+    "note": "dim",
+    "tool": "#4aa8ff",
+    "error": "#ff6b6b",
+    "reminder": "#ffb454",
 }
 
 
 class UserMessage(Static):
     def __init__(self, text: str):
-        super().__init__(Text.assemble(("you\n", "bold green"), (text, "")))
+        super().__init__(Text.assemble(("you\n", "bold #4aa8ff"), (text, "")))
 
 
 class AssistantMessage(Markdown):
@@ -74,19 +91,20 @@ class AssistantMessage(Markdown):
 
 class EventMessage(Static):
     def __init__(self, text: str, kind: str = "note"):
-        super().__init__(Text(text, style=_TOOL_COLORS.get(kind, "dim")))
+        super().__init__(Text(text, style=_EVENT_STYLES.get(kind, "dim")))
 
 
 class WelcomePanel(Static):
     def __init__(self, name: str):
         super().__init__(Text.from_markup(
-            f"[bold cyan]{escape(name)}[/bold cyan] [dim]terminal UI[/dim]\n"
-            "Ask anything, or type [bold]/help[/bold] for commands. "
-            "Answers stream in below your question."))
+            f"[bold #35d0ba]{escape(name)}[/bold #35d0ba] "
+            f"[dim]— your local assistant[/dim]\n\n"
+            "Ask anything. Answers stream in below.\n"
+            "Try [bold]/help[/bold] for commands, or say the wake word."))
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    """Blocking tool-confirmation dialog."""
+    """Blocking approval dialog for consequential tool calls."""
 
     BINDINGS = [
         Binding("y", "yes", "Yes"),
@@ -104,19 +122,18 @@ class ConfirmScreen(ModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         detail = json.dumps(self.args, ensure_ascii=False, default=str)
-        if len(detail) > 600:
-            detail = detail[:600] + " ..."
+        if len(detail) > 500:
+            detail = detail[:500] + " …"
         with Container(id="confirm-dialog"):
-            yield Label("Confirmation required", id="confirm-title")
-            yield Static(Text(self.reason), id="confirm-reason")
-            yield Static(Text(f"{self.tool} {detail}", style="dim"),
-                         id="confirm-args")
+            yield Static("Approval required", id="confirm-title")
+            yield Static(self.reason, id="confirm-reason")
+            yield Static(f"{self.tool}  {detail}", id="confirm-args")
             if self.mandatory:
-                yield Label("This action always needs confirmation.",
-                            id="confirm-mandatory")
+                yield Static("This action always needs approval.",
+                             id="confirm-mandatory")
             with Horizontal(id="confirm-buttons"):
-                yield Button("Yes (y)", id="yes", variant="success")
-                yield Button("No (n)", id="no", variant="error")
+                yield Button("Approve", id="yes", variant="primary")
+                yield Button("Deny", id="no", variant="error")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "yes")
@@ -129,40 +146,57 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class OptimusTUI(App):
-    """Optimus chat in the terminal."""
+    """Soundwave's terminal frontend."""
 
     CSS = """
     Screen { layout: vertical; }
 
-    Header { background: $primary-darken-2; }
-    Footer { background: $panel; }
+    #topbar {
+        height: 1;
+        background: $surface;
+        color: $text-muted;
+        padding: 0 1;
+    }
+    #brand { color: $accent; text-style: bold; }
+    #status { width: 1fr; content-align: right middle; }
 
+    #body { height: 1fr; }
+
+    #rail {
+        width: 22;
+        background: $surface;
+        border-right: solid $line;
+        padding: 1;
+    }
+    #rail-title { color: $text-muted; margin: 0 0 1 1; }
+    #rail Button {
+        width: 100%;
+        margin-bottom: 1;
+        text-align: left;
+        background: $boost;
+    }
+    #rail Button.-primary { background: $accent; color: #06231f; }
+    #rail-rule { height: 1; border-bottom: solid $line; margin: 1 0; }
+    #rail-meta { color: $text-muted; margin-top: 1; }
+
+    #main { width: 1fr; padding: 0 1 0 2; }
     #chat {
         height: 1fr;
         padding: 1 2;
         scrollbar-gutter: stable;
     }
 
-    #status {
-        height: 1;
-        padding: 0 2;
-        background: $panel;
-        color: $text-muted;
-    }
-
-    #prompt { margin: 0 1 1 1; }
-
     WelcomePanel {
         border: round $accent;
         padding: 1 2;
-        margin: 1 0 2 0;
+        margin: 0 0 1 0;
     }
 
     UserMessage {
-        border-left: thick $success;
-        padding: 0 1;
-        margin: 1 0 0 0;
-        background: $boost;
+        align: right top;
+        border-right: thick $secondary;
+        padding: 0 1 0 4;
+        margin: 1 0 1 4;
     }
 
     AssistantMessage {
@@ -174,54 +208,50 @@ class OptimusTUI(App):
     EventMessage {
         padding: 0 1;
         margin: 0 0 0 2;
+        color: $text-muted;
     }
 
-    ConfirmScreen {
-        align: center middle;
-        background: $background 60%;
-    }
+    ConfirmScreen { align: center middle; background: $background 65%; }
 
     #confirm-dialog {
-        width: 74;
+        width: 72;
         height: auto;
         border: thick $warning;
         background: $surface;
         padding: 1 2;
     }
-
-    #confirm-title {
-        text-style: bold;
-        color: $warning;
-        margin-bottom: 1;
-    }
-
+    #confirm-title { text-style: bold; color: $warning; margin-bottom: 1; }
     #confirm-reason { margin-bottom: 1; }
-    #confirm-args { margin-bottom: 1; }
+    #confirm-args { color: $text-muted; margin-bottom: 1; }
     #confirm-mandatory { color: $warning; margin-bottom: 1; }
-
-    #confirm-buttons {
-        height: auto;
-        align: right middle;
-    }
-
+    #confirm-buttons { height: auto; align: right middle; }
     #confirm-buttons Button { margin-left: 1; }
+
+    #prompt { margin: 0 1; }
+    #hints {
+        height: 1;
+        color: $text-muted;
+        padding: 0 1 1 1;
+    }
     """
 
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("ctrl+l", "clear", "Clear"),
         Binding("ctrl+n", "new_session", "New"),
-        Binding("ctrl+t", "toggle_auto", "Auto"),
+        Binding("ctrl+t", "toggle_auto", "Confirmations"),
         Binding("ctrl+r", "reminders", "Reminders"),
         Binding("f1", "help", "Help"),
         Binding("f2", "talk", "Talk"),
         Binding("f3", "toggle_voice", "Voice"),
         Binding("f4", "toggle_wake", "Wake"),
-        Binding("escape", "stop_speech", "Stop"),
+        Binding("escape", "stop_speech", "Stop speech"),
     ]
 
     def __init__(self, agent=None):
         super().__init__()
+        self.register_theme(_SOUNDWAVE_THEME)
+        self.theme = "soundwave"
         self._name = config.get("JARVIS_NAME")
         self.title = self._name
         self.sub_title = "terminal"
@@ -241,14 +271,30 @@ class OptimusTUI(App):
         self._delta_buf = []
         self._last_flush = 0.0
 
+    # ------------------------------------------------------------ compose --
+
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with VerticalScroll(id="chat"):
-            yield WelcomePanel(self._name)
-        yield Static("", id="status")
-        yield Input(placeholder="Ask Optimus...  (/help for commands)",
-                    id="prompt")
-        yield Footer()
+        with Horizontal(id="topbar"):
+            yield Static("[bold]◉ Soundwave[/bold]", id="brand")
+            yield Static("", id="status")
+        with Horizontal(id="body"):
+            with Vertical(id="rail"):
+                yield Static("Channels", id="rail-title")
+                yield Button("Briefing", id="btn-brief", variant="default")
+                yield Button("Jobs", id="btn-jobs", variant="default")
+                yield Button("Reminders", id="btn-reminders", variant="default")
+                yield Static("", id="rail-rule")
+                yield Button("Voice: off", id="btn-voice", variant="default")
+                yield Button("Wake: off", id="btn-wake", variant="default")
+                yield Button("New conversation", id="btn-new",
+                             variant="primary")
+                yield Static("", id="rail-meta")
+            with Vertical(id="main"):
+                with VerticalScroll(id="chat"):
+                    yield WelcomePanel(self._name)
+        yield Input(placeholder="Ask Soundwave…", id="prompt")
+        yield Static("Enter send · F2 talk · F4 wake · F3 voice · Esc stop "
+                     "· Ctrl+Q quit · /help", id="hints")
 
     def on_mount(self) -> None:
         if self._provided_agent is not None:
@@ -265,21 +311,50 @@ class OptimusTUI(App):
             self.action_toggle_wake()
         self.query_one("#prompt", Input).focus()
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id
+        if bid == "btn-brief":
+            self._handle_command("/briefing")
+        elif bid == "btn-jobs":
+            self._handle_command("/jobs")
+        elif bid == "btn-reminders":
+            self._handle_command("/reminders")
+        elif bid == "btn-voice":
+            self.action_toggle_voice()
+        elif bid == "btn-wake":
+            self.action_toggle_wake()
+        elif bid == "btn-new":
+            self._handle_command("/new")
+
     # ----------------------------------------------------------- helpers --
 
     def _set_status(self) -> None:
         mode = "auto" if config.get_bool("JARVIS_AUTO") else "ask"
-        state = ("listening..." if self._listening
-                 else "thinking..." if self._busy else "ready")
-        route = f" | {self._route_label}" if self._route_label else ""
-        voice = "on" if self._voice_on else "off"
-        wake = f" | wake {self._wake_state}" if self._wake_on else ""
+        state = ("listening…" if self._listening
+                 else "thinking…" if self._busy else "ready")
+        parts = [state]
+        if self._route_label:
+            parts.append(self._route_label)
+        parts.append(f"confirm {mode}")
+        if self._wake_on:
+            parts.append(f"wake {self._wake_state}")
+        parts.append(f"voice {'on' if self._voice_on else 'off'}")
         try:
-            self.query_one("#status", Static).update(
-                f"[dim]{escape(self._name)} | {state}{escape(route)} | "
-                f"confirm {mode} | voice {voice}{escape(wake)}[/dim]")
+            self.query_one("#status", Static).update(" · ".join(parts))
         except Exception:
             pass
+        self._refresh_buttons()
+
+    def _refresh_buttons(self) -> None:
+        labels = {
+            "btn-voice": f"Voice: {'on' if self._voice_on else 'off'}",
+            "btn-wake": f"Wake: {'on' if self._wake_on else 'off'}",
+        }
+        for bid, label in labels.items():
+            try:
+                self.query_one("#" + bid, Button).label = label
+            except Exception:
+                pass
 
     def _scroll_end(self) -> None:
         try:
@@ -324,20 +399,17 @@ class OptimusTUI(App):
     # ------------------------------------------------------ agent events --
 
     def _on_agent_event(self, event: dict) -> None:
-        """Called from the agent worker thread."""
         try:
             self.call_from_thread(self._render_event, event)
         except Exception:
             pass
 
     def _render_event(self, event: dict) -> None:
-        kind = event.get("type")
-        if kind == "route":
+        if event.get("type") == "route":
             self._route_label = f"{event.get('provider')}/{event.get('model')}"
             self._set_status()
 
     def _on_delta(self, piece: str) -> None:
-        """Streaming callback, invoked from the agent worker thread."""
         if not piece:
             return
         self._delta_buf.append(piece)
@@ -356,17 +428,14 @@ class OptimusTUI(App):
         self._write_stream(self._stream_text)
         self._scroll_end()
 
-    # -------------------------------------------------------- run a turn --
-
-    # ------------------------------------------------- wake word (TUI) --
+    # ------------------------------------------------------- wake word ----
 
     def action_toggle_wake(self) -> None:
         if self._wake_on:
             self._wake_on = False
             self._wake_state = "off"
             self._set_status()
-            self._add_event("wake word off (mic released when the loop exits)",
-                            "note")
+            self._add_event("Wake word off", "note")
             return
         if self._wake_thread and self._wake_thread.is_alive():
             return
@@ -377,7 +446,7 @@ class OptimusTUI(App):
                                              name="tui-wake", daemon=True)
         self._wake_thread.start()
         log.info("wake loop starting")
-        self._add_event("wake word on - say the wake phrase", "note")
+        self._add_event("Wake word on — say the wake phrase", "note")
 
     def _set_wake_state(self, state: str) -> None:
         self._wake_state = state
@@ -417,7 +486,7 @@ class OptimusTUI(App):
                 q = listen_after_wake()
                 if not q:
                     log.info("false wake (no speech)")
-                    time.sleep(2)        # false wake cool-down
+                    time.sleep(2)
                     self.call_from_thread(self._set_wake_state,
                                           f"armed ({phrase})")
                     continue
@@ -437,7 +506,6 @@ class OptimusTUI(App):
         self.call_from_thread(self._set_wake_state, "off")
 
     def _voice_turn_sync(self, question: str, speak) -> str:
-        """Ask the agent from the wake thread, render, then speak (blocking)."""
         self.call_from_thread(self._begin_voice_turn, question)
         try:
             answer = self.agent.ask(
@@ -449,7 +517,7 @@ class OptimusTUI(App):
         self.call_from_thread(self._finish_answer, answer)
         if answer and not answer.startswith("error:"):
             try:
-                speak(answer)          # mic stays closed while speaking
+                speak(answer)
             except Exception:
                 pass
         return answer
@@ -470,7 +538,7 @@ class OptimusTUI(App):
             spoken = self._voice_turn_sync(q, speak)
         return spoken
 
-    # ----------------------------------------------------------- voice --
+    # ------------------------------------------------------------- voice --
 
     def _voice_module(self):
         if self._voice is None:
@@ -496,18 +564,19 @@ class OptimusTUI(App):
     def action_toggle_voice(self) -> None:
         self._voice_on = not self._voice_on
         self._set_status()
-        self._add_event(f"spoken replies {'on' if self._voice_on else 'off'}",
+        self._add_event(f"Spoken replies {'on' if self._voice_on else 'off'}",
                         "note")
 
     def action_talk(self) -> None:
         if self._listening:
             return
         if self._busy:
-            self.notify("Wait for the current answer first.", severity="warning")
+            self.notify("Wait for the current answer first.",
+                        severity="warning")
             return
         self._listening = True
         self._set_status()
-        self._add_event("listening... speak now (F2)", "note")
+        self._add_event("Listening… speak now", "note")
         self.run_worker(self._listen_blocking, thread=True,
                         exclusive=False, name="listen")
 
@@ -515,8 +584,7 @@ class OptimusTUI(App):
         try:
             text = self._voice_module().listen(timeout=8, phrase_limit=30)
         except Exception as e:
-            text = ""
-            err = str(e)
+            text, err = "", str(e)
         else:
             err = ""
         self.call_from_thread(self._after_listen, text, err)
@@ -545,6 +613,8 @@ class OptimusTUI(App):
 
     def action_stop_speech(self) -> None:
         self._stop_speaking()
+
+    # --------------------------------------------------------- run a turn --
 
     def _submit_question(self, text: str) -> None:
         self._stop_speaking()
@@ -577,7 +647,7 @@ class OptimusTUI(App):
         self._voice_turn = False
         self._busy = False
         self._set_status()
-        if not voice_turn:              # wake loop speaks the answer itself
+        if not voice_turn:
             self._speak(final)
         self.call_after_refresh(self._scroll_end)
         try:
@@ -594,11 +664,10 @@ class OptimusTUI(App):
         except Exception:
             pass
 
-    # ------------------------------------------------------- confirmation --
+    # ------------------------------------------------------ confirmation --
 
     def _confirm(self, reason: str, fn_name: str, args: dict,
                  mandatory: bool = False) -> bool:
-        """Blocking hook used by Agent from the worker thread."""
         done = threading.Event()
         box = {}
 
@@ -607,8 +676,8 @@ class OptimusTUI(App):
                 box["result"] = bool(result)
                 done.set()
             try:
-                self.push_screen(
-                    ConfirmScreen(reason, fn_name, args, mandatory), callback)
+                self.push_screen(ConfirmScreen(reason, fn_name, args,
+                                               mandatory), callback)
             except Exception:
                 done.set()
 
@@ -629,7 +698,7 @@ class OptimusTUI(App):
         if isinstance(self.screen, ConfirmScreen):
             self.screen.dismiss(False)
 
-    # ---------------------------------------------------------- reminders --
+    # --------------------------------------------------------- reminders --
 
     def _on_reminder(self, reminder: dict) -> None:
         mark = "Missed reminder" if reminder.get("missed") else "Reminder"
@@ -646,7 +715,7 @@ class OptimusTUI(App):
         except Exception:
             pass
 
-    # ---------------------------------------------------------- commands --
+    # --------------------------------------------------------- commands ---
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -710,10 +779,10 @@ class OptimusTUI(App):
             else:
                 self._voice_on = not self._voice_on
             self._set_status()
-            self._add_event(f"spoken replies {'on' if self._voice_on else 'off'}",
-                            "note")
+            self._add_event(
+                f"Spoken replies {'on' if self._voice_on else 'off'}", "note")
         else:
-            self._add_event(f"unknown command {cmd} - try /help", "error")
+            self._add_event(f"Unknown command {cmd} — try /help", "error")
 
     def _handle_auto(self, value: str) -> None:
         value = value.lower()
@@ -726,7 +795,7 @@ class OptimusTUI(App):
         os.environ["JARVIS_AUTO"] = "1" if enabled else "0"
         self._set_status()
         self._add_event(
-            f"confirmation mode -> {'auto' if enabled else 'ask'}", "note")
+            f"Confirmation mode -> {'auto' if enabled else 'ask'}", "note")
 
     def _clear_chat(self) -> None:
         chat = self._chat()
@@ -742,7 +811,7 @@ class OptimusTUI(App):
             pass
         self._route_label = ""
         self._clear_chat()
-        self._add_event("started a new conversation", "note")
+        self._add_event("Started a new conversation", "note")
 
     def _show_status(self) -> None:
         mode = "auto" if config.get_bool("JARVIS_AUTO") else "ask"
@@ -750,17 +819,15 @@ class OptimusTUI(App):
             pending = len(scheduler.list_pending())
         except Exception:
             pending = 0
-        mem = ""
         try:
             mem = f"{self.agent.memory.count()} entries"
         except Exception:
-            pass
+            mem = "n/a"
         lines = [
-            f"**{self._name}**",
-            "",
+            f"**{self._name}**", "",
             f"- confirmations: **{mode}**",
             f"- pending reminders: **{pending}**",
-            f"- conversation memory: {mem or 'n/a'}",
+            f"- conversation memory: {mem}",
         ]
         self._add_assistant_text("\n".join(lines))
 
@@ -768,7 +835,7 @@ class OptimusTUI(App):
         try:
             rows = scheduler.list_pending()
         except Exception as e:
-            self._add_event(f"could not read reminders: {e}", "error")
+            self._add_event(f"Could not read reminders: {e}", "error")
             return
         if not rows:
             self._add_assistant_text("No pending reminders.")
@@ -778,7 +845,7 @@ class OptimusTUI(App):
             when = datetime.fromtimestamp(r["due_at"]).strftime(
                 "%a %d %b, %H:%M")
             repeat = f" ({r['repeat']})" if r.get("repeat") else ""
-            lines.append(f"- `{r['id']}` {r['message']} - {when}{repeat}")
+            lines.append(f"- `{r['id']}` {r['message']} — {when}{repeat}")
         self._add_assistant_text("\n".join(lines))
 
     def _start_briefing(self) -> None:
@@ -788,7 +855,7 @@ class OptimusTUI(App):
             return
         self._busy = True
         self._set_status()
-        self._add_event("building daily briefing...", "note")
+        self._add_event("Building the daily briefing…", "note")
         self.run_worker(self._briefing_blocking, thread=True,
                         exclusive=True, name="briefing")
 
@@ -806,9 +873,9 @@ class OptimusTUI(App):
             stats = jobs.tracker.stats()
             rows = jobs.tracker.list_jobs(limit=10)
         except Exception as e:
-            self._add_event(f"could not read jobs: {e}", "error")
+            self._add_event(f"Could not read jobs: {e}", "error")
             return
-        lines = [f"**Jobs** - {stats['total']} tracked", ""]
+        lines = [f"**Jobs** — {stats['total']} tracked", ""]
         for status, count in stats["by_status"].items():
             if count:
                 lines.append(f"- {status}: {count}")
@@ -819,10 +886,9 @@ class OptimusTUI(App):
                 company = job.get("company") or "?"
                 score = job.get("score")
                 score_txt = f"{score:.0f}" if isinstance(score, (int, float)) else "?"
-                lines.append(f"- [{score_txt}] {title} - {company}")
+                lines.append(f"- [{score_txt}] {title} — {company}")
         else:
-            lines.append("")
-            lines.append("No jobs tracked yet. Ask the agent to run a sweep.")
+            lines.extend(["", "No jobs yet. Ask Soundwave to run a sweep."])
         self._add_assistant_text("\n".join(lines))
 
     def _finish_command_text(self, text: str) -> None:
@@ -835,7 +901,7 @@ class OptimusTUI(App):
         except Exception:
             pass
 
-    # ----------------------------------------------------------- actions --
+    # ---------------------------------------------------------- actions ---
 
     def action_quit(self) -> None:
         self.exit()

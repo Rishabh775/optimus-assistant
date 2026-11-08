@@ -111,3 +111,19 @@ def test_wake_voice_turn_suppresses_double_speech():
             app._finish_answer("typed answer")
             assert spoken == ["typed answer"]
     asyncio.run(run())
+
+
+def test_sidebar_layout_and_toggles():
+    async def run():
+        app = OptimusTUI(agent=FakeAgent())
+        async with app.run_test(size=(110, 30)) as pilot:
+            await pilot.pause()
+            assert app.query_one("#brand") is not None
+            assert app.query_one("#btn-brief") is not None
+            assert app.query_one("#btn-wake").label == "Wake: off"
+            assert app.query_one("#btn-voice").label == "Voice: off"
+            app._voice_on = True
+            app._set_status()
+            assert app.query_one("#btn-voice").label == "Voice: on"
+            assert app.query_one("#status") is not None
+    asyncio.run(run())
