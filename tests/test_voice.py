@@ -88,16 +88,23 @@ def test_split_sentences():
     assert all(isinstance(c, str) and c for c in chunks)
 
 
+def _wait_for_threads(base, extra=0, timeout=3.0):
+    """Player/synth threads retire asynchronously; wait instead of guessing."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and threading.active_count() > base + extra:
+        time.sleep(0.02)
+    return threading.active_count()
+
+
 def test_speak_no_overlap_no_leak(fake_audio_out, tmp_path):
     base = threading.active_count()
     for _ in range(10):
         voice.speak("Alpha one. Beta two. Gamma three. Delta four.")
-    time.sleep(0.2)
+    assert _wait_for_threads(base) <= base
     assert fake_audio_out.overlaps == 0
     # every synthesized temp file cleaned up by _play
     leftovers = list(tmp_path.glob("*.mp3"))
     assert leftovers == []
-    assert threading.active_count() <= base
 
 
 def test_speak_interrupted_retires_threads(fake_audio_out):
@@ -109,9 +116,8 @@ def test_speak_interrupted_retires_threads(fake_audio_out):
         time.sleep(0.02)
         voice.stop_tts()
         t.join(timeout=2)
-    time.sleep(0.2)
+    assert _wait_for_threads(base, extra=1) <= base + 1
     assert fake_audio_out.overlaps == 0
-    assert threading.active_count() <= base + 1
 
 
 # ---- offline (Piper) TTS fallback ----

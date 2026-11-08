@@ -11,6 +11,17 @@ mic -> [wake-word] -> faster-whisper STT -> Agent -> [Router] -> Ollama (simple,
                        -> response -> edge-tts (Andrew voice) -> speaker
 ```
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/images/phone-home.png" width="280" alt="Soundwave phone app">
+  <img src="docs/images/phone-jobs.png" width="280" alt="Jobs tracker with source badges">
+</p>
+
+<p align="center">
+  <img src="docs/images/tui.png" width="820" alt="Soundwave terminal UI">
+</p>
+
 ## Install
 
 ```bash
@@ -29,6 +40,7 @@ The wake-word verifier for "hey soundwave" (plus "hey optimus" and "optimus") is
 
 ```bash
 python -m jarvis --mode text      # interactive text prompt
+python -m jarvis --mode tui       # full-screen terminal UI
 python -m jarvis --mode voice     # mic + speaker (push-to-talk)
 python -m jarvis --mode hotkey    # press JARVIS_HOTKEY to activate
 python -m jarvis --mode wake      # "optimus, ..." (chirps on wake, then
@@ -39,6 +51,8 @@ python -m jarvis --query "..."    # one-shot
 **In wake mode, speak *after* the greeting ends** — the mic is closed while Optimus talks (that's the echo guard), so commands spoken during the greeting are lost. Greetings are now 1-3 words (~1s).
 
 ## Tools (50)
+
+The TUI (`python -m jarvis.tui_main` or `--mode tui`) streams answers, shows the live route status, and uses a `y`/`n` dialog for confirmed actions. Try `/help` for slash commands (`/auto`, `/briefing`, `/reminders`, `/jobs`, `/new`).
 
 | Tool | What |
 |---|---|
