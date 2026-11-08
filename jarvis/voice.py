@@ -179,6 +179,7 @@ def _transcribe_scored(audio_f32: np.ndarray, model_name: str = None,
             **_stt_decode_kwargs())
         segs = list(segments)
         if not segs:
+            log("stt").warning(f"[stt] no segments from {model_name} (vad={vad})")
             return "", 0.0, 1.0
         text = " ".join(s.text.strip() for s in segs).strip()
         lp = float(sum(getattr(s, "avg_logprob", 0.0) for s in segs) / len(segs))
@@ -291,6 +292,9 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
                         # poisoned by a loud calibration moment.
                         global _ENERGY_GATE
                         _ENERGY_GATE = None
+                        log("stt").warning(
+                            f"[stt] timeout: no speech above gate {gate:.0f} "
+                            f"in {timeout}s (recalibrating next call)")
                         print(f"[{name}] (no speech above gate {gate:.0f} "
                               f"in {timeout}s - recalibrating; speak AFTER the greeting)")
                         return ""
@@ -318,13 +322,21 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
         return ""
     audio = np.concatenate(frames).astype(np.float32) / 32768.0
     if audio.max() < 0.01:
+        log("stt").warning("[stt] captured audio too quiet (peak < 0.01)")
         return ""
+    log("stt").info(
+        f"[stt] captured {len(audio)/_SAMPLE_RATE:.1f}s audio "
+        f"(peak {audio.max():.3f}, rms {float(np.sqrt((audio**2).mean())):.4f})")
     try:
         text, lp, nsp = _transcribe_scored(audio, model_name)
         if not text:
             # Silero VAD can strip quiet/short utterances entirely; the energy
             # gate already confirmed speech, so retry once without VAD
             text, lp, nsp = _transcribe_scored(audio, model_name, vad=False)
+        if not text:
+            log("stt").warning(
+                f"[stt] no transcript (vad+novad) after {len(audio)/_SAMPLE_RATE:.1f}s "
+                f"audio; nsp={nsp:.2f} lp={lp:.2f}")
         if text:
             max_nsp = config.get_float("JARVIS_STT_MAX_NO_SPEECH")
             min_lp = config.get_float("JARVIS_STT_MIN_LOGPROB")
@@ -335,10 +347,13 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
                 log("stt").info(f"[stt] rejected low-confidence transcript '{text[:40]}' "
                             f"(no_speech={nsp:.2f}, logprob={lp:.2f})")
                 return ""
+            log("stt").info(f"[stt] transcript '{text[:60]}' "
+                            f"(nsp={nsp:.2f} lp={lp:.2f})")
             print(f"[USER] {text}")
             sounds.end()  # audible: command captured, processing starts
         return text
     except Exception as e:
+        log("stt").exception(f"[stt] transcription failed: {e}")
         print(f"STT error: {e}")
         return ""
 

@@ -467,6 +467,18 @@ class OptimusTUI(App):
             return
         phrase = (config.get("JARVIS_WAKE_WORDS") or "hey_optimus") \
             .replace("_", " ").split(",")[0]
+        # Pre-load the command STT model off the critical path so the first
+        # spoken command transcribes instantly (and load errors surface now,
+        # rather than silently during a voice turn).
+        try:
+            from .voice import get_stt
+            threading.Thread(
+                target=get_stt,
+                args=(os.getenv("JARVIS_COMMAND_MODEL")
+                      or config.get("JARVIS_WHISPER_MODEL"),),
+                name="tui-stt-warm", daemon=True).start()
+        except Exception:
+            pass
         self.call_from_thread(self._set_wake_state, f"armed ({phrase})")
         while self._wake_on:
             try:
@@ -486,6 +498,9 @@ class OptimusTUI(App):
                 q = listen_after_wake()
                 if not q:
                     log.info("false wake (no speech)")
+                    self.call_from_thread(
+                        self._add_event,
+                        "Didn't catch that — say your request again", "note")
                     time.sleep(2)
                     self.call_from_thread(self._set_wake_state,
                                           f"armed ({phrase})")

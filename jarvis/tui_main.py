@@ -31,6 +31,9 @@ def main() -> None:
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    # Models are cached after first run; offline mode matches jarvis.__main__
+    # and skips the per-load HuggingFace revision checks during voice turns.
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
     _load_env()
 
     if "--check" in sys.argv:
