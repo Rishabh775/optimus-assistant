@@ -186,11 +186,13 @@ def read_file(path: str) -> str:
     p = Path(path).expanduser()
     if not p.is_absolute():
         p = WORKSPACE / p           # relative paths land in WORKSPACE
-    if not p.exists():
-        return f"NOT FOUND: {p}"
+    # check the secret-path block BEFORE existence so we never leak whether
+    # a sensitive file exists
     blocked = _check_read(p)
     if blocked:
         return blocked
+    if not p.exists():
+        return f"NOT FOUND: {p}"
     try:
         return p.read_text(errors="replace")[:16000]
     except Exception as e:
