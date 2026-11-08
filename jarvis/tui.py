@@ -11,6 +11,7 @@ A thin frontend over the same Agent pipeline as the text/voice modes:
 Run with: python -m jarvis --mode tui
 """
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,8 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Header, Input, Label, Markdown, Static
 
 from . import config, scheduler
+
+log = logging.getLogger("soundwave.tui")
 
 _HELP = """**Optimus TUI**
 
@@ -373,6 +376,7 @@ class OptimusTUI(App):
         self._wake_thread = threading.Thread(target=self._wake_loop,
                                              name="tui-wake", daemon=True)
         self._wake_thread.start()
+        log.info("wake loop starting")
         self._add_event("wake word on - say the wake phrase", "note")
 
     def _set_wake_state(self, state: str) -> None:
@@ -386,12 +390,14 @@ class OptimusTUI(App):
             from .__main__ import _greet, _is_stop, _is_echo
             from .voice import listen, speak
         except Exception as e:
+            log.warning("wake unavailable: %s", e)
             self.call_from_thread(self._add_event,
                                   f"wake unavailable: {e}", "error")
             self._wake_on = False
             self.call_from_thread(self._set_wake_state, "off")
             return
-        phrase = (config.get("JARVIS_WAKE_WORDS") or "hey_optimus")             .replace("_", " ").split(",")[0]
+        phrase = (config.get("JARVIS_WAKE_WORDS") or "hey_optimus") \
+            .replace("_", " ").split(",")[0]
         self.call_from_thread(self._set_wake_state, f"armed ({phrase})")
         while self._wake_on:
             try:
@@ -401,6 +407,7 @@ class OptimusTUI(App):
                     break
                 if not woke or not self._wake_on:
                     continue
+                log.info("wake word detected")
                 self.call_from_thread(self._set_wake_state, "heard wake word")
                 sounds.ack()
                 time.sleep(0.25)
@@ -409,10 +416,12 @@ class OptimusTUI(App):
                 self.call_from_thread(self._set_wake_state, "listening")
                 q = listen_after_wake()
                 if not q:
+                    log.info("false wake (no speech)")
                     time.sleep(2)        # false wake cool-down
                     self.call_from_thread(self._set_wake_state,
                                           f"armed ({phrase})")
                     continue
+                log.info("transcript: %s", q[:200])
                 spoken = self._voice_turn_sync(q, speak)
                 if config.get_bool("JARVIS_FOLLOWUP"):
                     spoken = self._voice_followups(spoken, listen, _is_stop,
@@ -420,9 +429,11 @@ class OptimusTUI(App):
                 self.call_from_thread(self._set_wake_state,
                                       f"armed ({phrase})")
             except Exception as e:
+                log.exception("wake loop error")
                 self.call_from_thread(self._add_event,
                                       f"wake error: {e}", "error")
                 time.sleep(2)
+        log.info("wake loop stopped")
         self.call_from_thread(self._set_wake_state, "off")
 
     def _voice_turn_sync(self, question: str, speak) -> str:
@@ -473,6 +484,7 @@ class OptimusTUI(App):
         try:
             self._voice_module().speak(text, blocking=False)
         except Exception as e:
+            log.warning("voice output unavailable: %s", e)
             self._add_event(f"voice output unavailable: {e}", "error")
 
     def _stop_speaking(self) -> None:
@@ -513,6 +525,7 @@ class OptimusTUI(App):
         self._listening = False
         self._set_status()
         if err:
+            log.warning("voice input unavailable: %s", err)
             self._add_event(f"voice input unavailable: {err}", "error")
             return
         text = (text or "").strip()
@@ -843,5 +856,24 @@ class OptimusTUI(App):
         self._handle_command("/help")
 
 
+def _setup_tui_logging() -> None:
+    """TUI logs go to a file (stdout is the Textual screen)."""
+    from pathlib import Path
+    raw = os.environ.get("JARVIS_TUI_LOG") or \
+        str(Path(__file__).resolve().parents[1] / "data" / "logs" / "tui.log")
+    path = Path(raw).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+    fh = logging.FileHandler(path)
+    fh.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(fh)
+    root.setLevel(logging.INFO)
+    log.info("TUI started (log=%s)", path)
+
+
 def run_tui(agent=None) -> None:
+    _setup_tui_logging()
     OptimusTUI(agent=agent).run()

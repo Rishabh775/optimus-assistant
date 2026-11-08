@@ -163,6 +163,7 @@ DEFAULTS = {
     # TUI: voice output for typed answers, and the wake-word voice loop
     "JARVIS_TUI_VOICE": "0",
     "JARVIS_TUI_WAKE": "0",
+    "JARVIS_TUI_LOG": "data/logs/tui.log",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

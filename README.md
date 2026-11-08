@@ -62,6 +62,10 @@ The wake loop keeps the mic exclusive; run only one of TUI/voice/wake per machin
 | `F1` | help |
 
 The text UI remains a backup: `soundwave-cli`, or `JARVIS_TUI_WAKE=0 soundwave`.
+
+TUI diagnostics go to `data/logs/tui.log` (`JARVIS_TUI_LOG`): wake detection,
+transcripts, voice errors and loop failures. `tail -f data/logs/tui.log` while
+testing voice.
 The TUI avoids importing the voice stack until you use a voice feature, so
 missing mic/audio deps can't stop it from starting.
 
