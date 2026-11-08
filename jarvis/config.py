@@ -160,6 +160,9 @@ DEFAULTS = {
     "JARVIS_TELEGRAM_ENABLED": "0",
     "JARVIS_TELEGRAM_BOT_TOKEN": "",
     "JARVIS_TELEGRAM_ALLOW": "",
+    # TUI: voice output for typed answers, and the wake-word voice loop
+    "JARVIS_TUI_VOICE": "0",
+    "JARVIS_TUI_WAKE": "0",
     # aggregator feeds have no ETag -> refresh them hourly, ATS boards often
     "JARVIS_JOBS_FEEDS_INTERVAL_MIN": "60",
 }

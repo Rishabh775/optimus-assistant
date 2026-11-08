@@ -48,6 +48,23 @@ soundwave --check  # verify imports/config/memory without opening the UI
 It `cd`s into the repo first — running `python -m jarvis` from `~` fails because
 Python treats `~/jarvis` (the folder) as a namespace package.
 
+`soundwave` is **voice-first**: it starts the TUI with the wake-word loop enabled
+(`JARVIS_TUI_WAKE=1`). Say the wake phrase (default “hey soundwave”) → chirp →
+short greeting → speak your question → spoken answer, then a follow-up window.
+The wake loop keeps the mic exclusive; run only one of TUI/voice/wake per machine.
+
+| Key | Action |
+|---|---|
+| `F2` | push-to-talk (one utterance) |
+| `F4` / `/wake` | toggle the wake-word loop |
+| `F3` / `/voice` | toggle spoken replies for typed messages |
+| `Esc` | stop the current speech |
+| `F1` | help |
+
+The text UI remains a backup: `soundwave-cli`, or `JARVIS_TUI_WAKE=0 soundwave`.
+The TUI avoids importing the voice stack until you use a voice feature, so
+missing mic/audio deps can't stop it from starting.
+
 From inside the repo, `python -m jarvis` now opens the **TUI by default on a
 terminal**; non-interactive/piped runs stay in text mode, and `--mode text`
 forces the fallback. If Textual is missing, the launcher falls back to text.

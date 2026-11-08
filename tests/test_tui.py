@@ -75,3 +75,39 @@ def test_confirmation_dialog_approves_tool_call():
             app.exit()
 
     asyncio.run(run())
+
+
+def test_voice_and_wake_commands():
+    async def run():
+        agent = FakeAgent()
+        app = OptimusTUI(agent=agent)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            app._handle_command("/voice on")
+            assert app._voice_on is True
+            app._handle_command("/voice off")
+            assert app._voice_on is False
+
+            calls = []
+            app.action_toggle_wake = lambda: calls.append(1)
+            app._handle_command("/wake on")
+            app._wake_on = True          # toggle stub does not flip state
+            app._handle_command("/wake off")
+            assert calls == [1, 1]
+    asyncio.run(run())
+
+
+def test_wake_voice_turn_suppresses_double_speech():
+    async def run():
+        agent = FakeAgent()
+        app = OptimusTUI(agent=agent)
+        async with app.run_test(size=(100, 30)) as pilot:
+            await pilot.pause()
+            spoken = []
+            app._speak = lambda text: spoken.append(text)
+            app._begin_voice_turn("hello")
+            app._finish_answer("answer from wake loop")
+            assert spoken == []          # wake loop speaks it blocking itself
+            app._finish_answer("typed answer")
+            assert spoken == ["typed answer"]
+    asyncio.run(run())

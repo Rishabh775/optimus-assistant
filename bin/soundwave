@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="${SOUNDWAVE_ROOT:-$HOME/jarvis}"
 PY="$ROOT/.venv/bin/python"
 cd "$ROOT"
+# Soundwave launcher is voice-first; text TUI still works if mic is unavailable
+export JARVIS_TUI_WAKE="${JARVIS_TUI_WAKE:-1}"
 if ! "$PY" -c "import textual" >/dev/null 2>&1; then
   echo "Textual is missing; starting text mode instead." >&2
   echo "Install TUI deps: $PY -m pip install -r $ROOT/requirements-tui.txt" >&2

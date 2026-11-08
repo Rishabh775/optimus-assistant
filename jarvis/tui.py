@@ -33,6 +33,7 @@ Tool calls run quietly in the background unless they need confirmation.
 
 **Slash commands**
 - `/help` - this help
+- `/wake [on|off]` - wake-word voice loop (F4); `/voice on|off` - spoke replies (F3)
 - `/auto [on|off]` - toggle confirmation mode
 - `/status` - current config + pending reminders
 - `/reminders` - list pending reminders
@@ -210,6 +211,10 @@ class OptimusTUI(App):
         Binding("ctrl+t", "toggle_auto", "Auto"),
         Binding("ctrl+r", "reminders", "Reminders"),
         Binding("f1", "help", "Help"),
+        Binding("f2", "talk", "Talk"),
+        Binding("f3", "toggle_voice", "Voice"),
+        Binding("f4", "toggle_wake", "Wake"),
+        Binding("escape", "stop_speech", "Stop"),
     ]
 
     def __init__(self, agent=None):
@@ -223,6 +228,13 @@ class OptimusTUI(App):
         self._route_label = ""
         self._stream_text = ""
         self._stream_widget = None
+        self._voice_on = config.get_bool("JARVIS_TUI_VOICE")
+        self._listening = False
+        self._voice = None
+        self._voice_turn = False
+        self._wake_on = False
+        self._wake_state = "off"
+        self._wake_thread = None
         self._delta_buf = []
         self._last_flush = 0.0
 
@@ -246,18 +258,23 @@ class OptimusTUI(App):
                                on_event=self._on_agent_event)
         scheduler.add_listener(self._on_reminder)
         self._set_status()
+        if config.get_bool("JARVIS_TUI_WAKE"):
+            self.action_toggle_wake()
         self.query_one("#prompt", Input).focus()
 
     # ----------------------------------------------------------- helpers --
 
     def _set_status(self) -> None:
         mode = "auto" if config.get_bool("JARVIS_AUTO") else "ask"
-        state = "thinking..." if self._busy else "ready"
+        state = ("listening..." if self._listening
+                 else "thinking..." if self._busy else "ready")
         route = f" | {self._route_label}" if self._route_label else ""
+        voice = "on" if self._voice_on else "off"
+        wake = f" | wake {self._wake_state}" if self._wake_on else ""
         try:
             self.query_one("#status", Static).update(
                 f"[dim]{escape(self._name)} | {state}{escape(route)} | "
-                f"confirm {mode}[/dim]")
+                f"confirm {mode} | voice {voice}{escape(wake)}[/dim]")
         except Exception:
             pass
 
@@ -338,7 +355,186 @@ class OptimusTUI(App):
 
     # -------------------------------------------------------- run a turn --
 
+    # ------------------------------------------------- wake word (TUI) --
+
+    def action_toggle_wake(self) -> None:
+        if self._wake_on:
+            self._wake_on = False
+            self._wake_state = "off"
+            self._set_status()
+            self._add_event("wake word off (mic released when the loop exits)",
+                            "note")
+            return
+        if self._wake_thread and self._wake_thread.is_alive():
+            return
+        self._wake_on = True
+        self._wake_state = "starting"
+        self._set_status()
+        self._wake_thread = threading.Thread(target=self._wake_loop,
+                                             name="tui-wake", daemon=True)
+        self._wake_thread.start()
+        self._add_event("wake word on - say the wake phrase", "note")
+
+    def _set_wake_state(self, state: str) -> None:
+        self._wake_state = state
+        self._set_status()
+
+    def _wake_loop(self) -> None:
+        try:
+            from .wake import wait_for_wake, listen_after_wake
+            from . import sounds
+            from .__main__ import _greet, _is_stop, _is_echo
+            from .voice import listen, speak
+        except Exception as e:
+            self.call_from_thread(self._add_event,
+                                  f"wake unavailable: {e}", "error")
+            self._wake_on = False
+            self.call_from_thread(self._set_wake_state, "off")
+            return
+        phrase = (config.get("JARVIS_WAKE_WORDS") or "hey_optimus")             .replace("_", " ").split(",")[0]
+        self.call_from_thread(self._set_wake_state, f"armed ({phrase})")
+        while self._wake_on:
+            try:
+                woke = False
+                for _ in wait_for_wake():
+                    woke = True
+                    break
+                if not woke or not self._wake_on:
+                    continue
+                self.call_from_thread(self._set_wake_state, "heard wake word")
+                sounds.ack()
+                time.sleep(0.25)
+                self.call_from_thread(self._set_wake_state, "greeting")
+                _greet()
+                self.call_from_thread(self._set_wake_state, "listening")
+                q = listen_after_wake()
+                if not q:
+                    time.sleep(2)        # false wake cool-down
+                    self.call_from_thread(self._set_wake_state,
+                                          f"armed ({phrase})")
+                    continue
+                spoken = self._voice_turn_sync(q, speak)
+                if config.get_bool("JARVIS_FOLLOWUP"):
+                    spoken = self._voice_followups(spoken, listen, _is_stop,
+                                                   _is_echo, speak)
+                self.call_from_thread(self._set_wake_state,
+                                      f"armed ({phrase})")
+            except Exception as e:
+                self.call_from_thread(self._add_event,
+                                      f"wake error: {e}", "error")
+                time.sleep(2)
+        self.call_from_thread(self._set_wake_state, "off")
+
+    def _voice_turn_sync(self, question: str, speak) -> str:
+        """Ask the agent from the wake thread, render, then speak (blocking)."""
+        self.call_from_thread(self._begin_voice_turn, question)
+        try:
+            answer = self.agent.ask(
+                question,
+                on_delta=lambda piece: self.call_from_thread(
+                    self._on_delta, piece))
+        except Exception as e:
+            answer = f"error: {e}"
+        self.call_from_thread(self._finish_answer, answer)
+        if answer and not answer.startswith("error:"):
+            try:
+                speak(answer)          # mic stays closed while speaking
+            except Exception:
+                pass
+        return answer
+
+    def _voice_followups(self, last_answer: str, listen, is_stop, is_echo,
+                         speak) -> str:
+        window = config.get_float("JARVIS_FOLLOWUP_SECONDS")
+        spoken = last_answer
+        while self._wake_on:
+            self.call_from_thread(self._set_wake_state,
+                                  f"follow-up ({int(window)}s)")
+            q = listen(timeout=window, phrase_limit=30)
+            if not q or is_stop(q):
+                self.call_from_thread(self._set_wake_state, "armed")
+                return spoken
+            if is_echo(q, spoken):
+                continue
+            spoken = self._voice_turn_sync(q, speak)
+        return spoken
+
+    # ----------------------------------------------------------- voice --
+
+    def _voice_module(self):
+        if self._voice is None:
+            from . import voice
+            self._voice = voice
+        return self._voice
+
+    def _speak(self, text: str) -> None:
+        if not self._voice_on or not (text or "").strip():
+            return
+        try:
+            self._voice_module().speak(text, blocking=False)
+        except Exception as e:
+            self._add_event(f"voice output unavailable: {e}", "error")
+
+    def _stop_speaking(self) -> None:
+        try:
+            self._voice_module().stop_tts()
+        except Exception:
+            pass
+
+    def action_toggle_voice(self) -> None:
+        self._voice_on = not self._voice_on
+        self._set_status()
+        self._add_event(f"spoken replies {'on' if self._voice_on else 'off'}",
+                        "note")
+
+    def action_talk(self) -> None:
+        if self._listening:
+            return
+        if self._busy:
+            self.notify("Wait for the current answer first.", severity="warning")
+            return
+        self._listening = True
+        self._set_status()
+        self._add_event("listening... speak now (F2)", "note")
+        self.run_worker(self._listen_blocking, thread=True,
+                        exclusive=False, name="listen")
+
+    def _listen_blocking(self) -> None:
+        try:
+            text = self._voice_module().listen(timeout=8, phrase_limit=30)
+        except Exception as e:
+            text = ""
+            err = str(e)
+        else:
+            err = ""
+        self.call_from_thread(self._after_listen, text, err)
+
+    def _after_listen(self, text: str, err: str = "") -> None:
+        self._listening = False
+        self._set_status()
+        if err:
+            self._add_event(f"voice input unavailable: {err}", "error")
+            return
+        text = (text or "").strip()
+        if not text:
+            self.notify("No speech detected.", severity="warning")
+            return
+        self._add_event(f"heard: {text}", "note")
+        self._submit_question(text)
+
+    def _begin_voice_turn(self, question: str) -> None:
+        self._voice_turn = True
+        self._add_user(question)
+        self._reset_stream()
+        self._route_label = ""
+        self._busy = True
+        self._set_status()
+
+    def action_stop_speech(self) -> None:
+        self._stop_speaking()
+
     def _submit_question(self, text: str) -> None:
+        self._stop_speaking()
         self._add_user(text)
         self._reset_stream()
         self._route_label = ""
@@ -364,8 +560,12 @@ class OptimusTUI(App):
         self._stream_text = final
         self._write_stream(final)
         self._stream_widget = None
+        voice_turn = self._voice_turn
+        self._voice_turn = False
         self._busy = False
         self._set_status()
+        if not voice_turn:              # wake loop speaks the answer itself
+            self._speak(final)
         self.call_after_refresh(self._scroll_end)
         try:
             self.query_one("#prompt", Input).focus()
@@ -480,6 +680,25 @@ class OptimusTUI(App):
             self._start_briefing()
         elif cmd == "/jobs":
             self._show_jobs()
+        elif cmd == "/wake":
+            if rest.lower() in ("on", "1", "true", "yes"):
+                if not self._wake_on:
+                    self.action_toggle_wake()
+            elif rest.lower() in ("off", "0", "false", "no"):
+                if self._wake_on:
+                    self.action_toggle_wake()
+            else:
+                self.action_toggle_wake()
+        elif cmd == "/voice":
+            if rest.lower() in ("on", "1", "true", "yes"):
+                self._voice_on = True
+            elif rest.lower() in ("off", "0", "false", "no"):
+                self._voice_on = False
+            else:
+                self._voice_on = not self._voice_on
+            self._set_status()
+            self._add_event(f"spoken replies {'on' if self._voice_on else 'off'}",
+                            "note")
         else:
             self._add_event(f"unknown command {cmd} - try /help", "error")
 
@@ -595,6 +814,7 @@ class OptimusTUI(App):
 
     def _finish_command_text(self, text: str) -> None:
         self._add_assistant_text(text or "(empty)")
+        self._speak(text)
         self._busy = False
         self._set_status()
         try:
