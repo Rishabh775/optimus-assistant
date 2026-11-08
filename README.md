@@ -7,7 +7,7 @@ mic -> [wake-word] -> faster-whisper STT -> Agent -> [Router] -> Ollama (simple,
                                                          \-> glm-5.3-flash (default cloud)
                                                          \-> mimo-v2.6-flash (cloud fallback)
                                                          \-> Kimi K2.7 Code (code)
-                       -> 23 tools (self-status/memory/triage/shell/file/web/browser/email/calendar/HA)
+                       -> 50 tools (skills/self-status/memory/triage/shell/file/web/browser/email/calendar/jobs/HA)
                        -> response -> edge-tts (Andrew voice) -> speaker
 ```
 
