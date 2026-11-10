@@ -268,15 +268,18 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
     print(f"[{name}] listening...")
     frames, voiced, quiet_run, waited = [], False, 0, 0
     gain = config.get_float("JARVIS_MIC_GAIN")
-    # Hysteresis + adaptive stop threshold: the (higher) gate decides when you
-    # START talking; once talking, capture ends only when audio drops well below
-    # YOUR speech level (ref), not below the room gate. This stops the "cuts me
-    # off mid-sentence" behaviour on soft syllables / short pauses.
-    stop_ratio = config.get_float("JARVIS_STT_STOP_RATIO")
-    stop_floor = config.get_float("JARVIS_STT_STOP_FLOOR")
+    # Hysteresis thresholds relative to the calibrated noise floor `gate`:
+    # speech must rise clearly ABOVE the noise to start, and is treated as
+    # over only once it falls back to just above the noise. Both are relative
+    # to the ambient floor (not a fixed 120 peak, and not a ratio of the
+    # loudest syllable), so room noise (fans, AC) can't keep the mic open and
+    # soft syllables don't trip end-of-speech mid-sentence.
+    start_gate = gate * config.get_float("JARVIS_STT_START_MULT")
+    stop_gate = gate * config.get_float("JARVIS_STT_STOP_MULT")
+    pre_roll = max(1, int(config.get_float("JARVIS_STT_PREROLL_MS") / chunk_ms))
     min_speech_chunks = max(
         1, int(config.get_float("JARVIS_STT_MIN_SPEECH") * 1000 / chunk_ms))
-    ref = 0.0
+    ring: list = []          # pre-roll buffer so the first syllable isn't clipped
     speech_chunks = 0
     try:
         with sd.InputStream(samplerate=_SAMPLE_RATE, channels=1,
@@ -293,24 +296,28 @@ def listen(timeout: int = 6, phrase_limit: int = 30,
                         global _ENERGY_GATE
                         _ENERGY_GATE = None
                         log("stt").warning(
-                            f"[stt] timeout: no speech above gate {gate:.0f} "
+                            f"[stt] timeout: no speech above gate {start_gate:.0f} "
                             f"in {timeout}s (recalibrating next call)")
-                        print(f"[{name}] (no speech above gate {gate:.0f} "
+                        print(f"[{name}] (no speech above gate {start_gate:.0f} "
                               f"in {timeout}s - recalibrating; speak AFTER the greeting)")
                         return ""
-                    if peak < gate:
+                    if peak < start_gate:
+                        ring.append(audio)
+                        if len(ring) > pre_roll:
+                            ring.pop(0)
                         continue
-                    voiced = True  # speech started
-                    ref = float(peak)
+                    # speech started: flush pre-roll, then this chunk
+                    frames.extend(ring)
+                    ring.clear()
+                    voiced = True
                     speech_chunks = 1
                     quiet_run = 0
                 else:
                     speech_chunks += 1
-                    ref = max(float(peak), ref * 0.98)   # track speech level
-                    stop_gate = max(stop_floor, ref * stop_ratio)
-                    if peak < stop_gate and speech_chunks >= min_speech_chunks:
+                    if peak < stop_gate:
                         quiet_run += 1
-                        if quiet_run * chunk_ms >= end_silence_ms:
+                        if speech_chunks >= min_speech_chunks and \
+                                quiet_run * chunk_ms >= end_silence_ms:
                             break  # end of speech
                     else:
                         quiet_run = 0

@@ -38,9 +38,12 @@ DEFAULTS = {
         "Voice commands to a local assistant about files, folders, HTML, CSS, "
         "JavaScript, DOM manipulation, workspace, email, calendar."),
     "JARVIS_STT_HOTWORDS": "DOM manipulation HTML CSS JavaScript workspace",
-    "JARVIS_STT_END_SILENCE": "1800",
+    "JARVIS_STT_END_SILENCE": "2000",
     "JARVIS_STT_ENERGY_MULT": "1.0",
     "JARVIS_STT_GATE_MAX": "15000",
+    "JARVIS_STT_START_MULT": "1.5",
+    "JARVIS_STT_STOP_MULT": "1.2",
+    "JARVIS_STT_PREROLL_MS": "300",
     "JARVIS_STT_STOP_RATIO": "0.35",
     "JARVIS_STT_STOP_FLOOR": "120",
     "JARVIS_STT_MIN_SPEECH": "0.5",
@@ -200,6 +203,9 @@ _RANGES = {
     "JARVIS_STT_END_SILENCE": (200, 8000),
     "JARVIS_STT_ENERGY_MULT": (0.1, 10.0),
     "JARVIS_STT_GATE_MAX": (400, 32767),
+    "JARVIS_STT_START_MULT": (1.0, 8.0),
+    "JARVIS_STT_STOP_MULT": (1.0, 8.0),
+    "JARVIS_STT_PREROLL_MS": (0, 2000),
     "JARVIS_STT_MAX_NO_SPEECH": (0.0, 1.0),
     "JARVIS_LLM_TIMEOUT": (5, 600),
 }

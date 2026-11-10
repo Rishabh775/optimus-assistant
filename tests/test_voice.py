@@ -186,11 +186,13 @@ def _capture_dur(fake_mic, monkeypatch):
 
 
 def test_hysteresis_survives_soft_dip(fake_mic, monkeypatch):
-    # loud room: gate 2000; speech 4000; a soft dip to 1500 for 2.5s mid-sentence
-    voice._ENERGY_GATE = 2000
-    fake_mic.script = [("Q", 3), (4000, 5), (1500, 25), (4000, 3), ("Q", 40)]
+    # noisy room: noise floor (gate) 1000 -> start gate 1500, stop gate 1200.
+    # speech peaks at 3000; a soft dip to 1300 (still above the 1200 stop
+    # gate) for 2.5s mid-sentence must NOT end capture.
+    voice._ENERGY_GATE = 1000
+    fake_mic.script = [("Q", 3), (3000, 5), (1300, 25), (3000, 3), ("Q", 40)]
     dur = _capture_dur(fake_mic, monkeypatch)
-    # the dip alone is 2.5s; proving capture continued through it (old code cut ~1.1s)
+    # the dip alone is 2.5s; proving capture continued through it
     assert dur > 2.5, dur
 
 
